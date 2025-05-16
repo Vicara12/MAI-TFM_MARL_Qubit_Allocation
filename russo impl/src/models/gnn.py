@@ -1,3 +1,4 @@
+from typing import Tuple
 import torch
 import torch.nn as nn
 
@@ -19,8 +20,8 @@ class GNN(nn.Module):
     D_sqrt = torch.diag(torch.pow(torch.sum(Z_, axis=-1), -0.5)) # Compute D^(-0.5)
     return D_sqrt @ Z_ @ D_sqrt
 
-  def __init__(self, graphs: tuple[torch.ndarray], out_shape):
-    super(GNN, self).__init__()
+  def __init__(self, graphs: Tuple[torch.ndarray], out_shape):
+    super().__init__()
     self.deg = graphs[0].shape[0]
     self.out_shape = out_shape
     self.fc = nn.Linear(self.deg, self.out_shape)
