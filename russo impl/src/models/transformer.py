@@ -13,7 +13,7 @@ class TransformerEncoderBlock(nn.Module):
     self.norm2 = nn.LayerNorm(embed_dim)
     self.dropout = nn.Dropout(dropout)
   
-  def forward(self, X: torch.ndarray):
+  def forward(self, X: torch.Tensor) -> torch.Tensor:
     # X shape: [T, B, E] where T = num_slices, B = batch, E = embed_dim
     attn_out, _ = self.attention(X, X, X)
     X = self.norm1(X + self.dropout(attn_out))
@@ -29,7 +29,7 @@ class TransformerEncoder(nn.Module):
       TransformerEncoderBlock(embed_dim, num_heads, ff_hiden_dim) for _ in range(num_layers)
     ])
   
-  def forward(self, X):
+  def forward(self, X: torch.Tensor) -> torch.Tensor:
     # X shape: [T, B, E] where T = num_slices, B = batch, E = embed_dim
     for layer in self.layers:
       X = layer(X)
