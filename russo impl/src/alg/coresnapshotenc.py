@@ -25,7 +25,7 @@ class CoreSnapshotEncoder(nn.Module):
     self.padding_emb = nn.Parameter(torch.zeros((core_emb_shape,)))
     self.gnn = GNN((core_con,), core_emb_shape)
   
-  def forward(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor):
+  def forward(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
     '''
     Args:
       - prev_assign: for each logical qubit, the core to which it has been mapped. Shape: [Q]
