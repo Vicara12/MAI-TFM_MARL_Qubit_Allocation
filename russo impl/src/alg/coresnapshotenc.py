@@ -10,8 +10,8 @@ class CoreSnapshotEncoder(nn.Module):
   This class implements section III C from Ref. [1].
 
   Args:
-    core_con: matrix of core connectivities of the architecture.
-    core_emb_shape: length of the output core embedding, d_H in Ref. [1].
+    - core_con: matrix of core connectivities of the architecture.
+    - core_emb_shape: length of the output core embedding, d_H in Ref. [1].
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]

@@ -13,10 +13,10 @@ class CircuitSliceEncoder(nn.Module):
   This class implements section III B 1 & 2 from Ref. [1].
 
   Args:
-    num_lq: number of logical qubits in the circuit.
-    circuit_slices: adjacency matrix of gate connections for each time slice in the circuit.
-    emb_shape: shape of the time slice embeddings, d_E in Ref. [1].
-    num_enc_transf: number of transformer blocks for the encoder, b in Ref. [1].
+    - num_lq: number of logical qubits in the circuit.
+    - circuit_slices: adjacency matrix of gate connections for each time slice in the circuit.
+    - emb_shape: shape of the time slice embeddings, d_E in Ref. [1].
+    - num_enc_transf: number of transformer blocks for the encoder, b in Ref. [1].
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]

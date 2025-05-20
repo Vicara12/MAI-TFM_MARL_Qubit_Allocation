@@ -19,9 +19,9 @@ class Decoder(nn.Module):
   is for both qubits in the gate.
 
   Args:
-    core_capacities: list that contains the number of qubits that can be held per core.
-    core_emb_size: length of the output core embedding, d_H in Ref. [1].
-    slice_emb_size: length of the slice embedding, d_E in Ref. [1].
+    - core_capacities: list that contains the number of qubits that can be held per core.
+    - core_emb_size: length of the output core embedding, d_H in Ref. [1].
+    - slice_emb_size: length of the slice embedding, d_E in Ref. [1].
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]
