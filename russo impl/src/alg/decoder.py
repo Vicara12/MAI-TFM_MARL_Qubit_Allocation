@@ -32,7 +32,9 @@ class Decoder(nn.Module):
     super().__init__()
     self.slice_emb_size = slice_emb_size
     self.capacity_emb = nn.Embedding(max(core_capacities)+1, core_emb_size)
-    self.dist_emb = nn.Embedding(2, core_emb_size) # I'll keep distance binary for now (connected/not connected)
+    # For now distance is binary (0 disconnected / 1 connected), but as there might be two qubits
+    # and the distances add up then the possible values are 0, 1 and 2
+    self.dist_emb = nn.Embedding(3, core_emb_size)
     self.W_q = nn.Linear(3*slice_emb_size, core_emb_size, bias=False)
     self.W_k = nn.Linear(slice_emb_size, slice_emb_size, bias=False)
     self.W_v = nn.Linear(slice_emb_size, slice_emb_size, bias=False)
@@ -48,7 +50,7 @@ class Decoder(nn.Module):
     '''
     if double:
       return (core_capacities < 2)
-    return (core_capacities == 0)
+    return (core_capacities < 1)
   
   def forward(self, Ht_C: torch.Tensor, core_capacities: torch.Tensor, distances: torch.Tensor,
               H_X: torch.Tensor, Ht_S: torch.Tensor, Eq_Q: torch.Tensor, double: bool) -> torch.Tensor:

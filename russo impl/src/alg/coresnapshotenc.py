@@ -23,7 +23,8 @@ class CoreSnapshotEncoder(nn.Module):
     super().__init__()
     self.n_cores = core_con.shape[0]
     self.padding_emb = nn.Parameter(torch.zeros((core_emb_shape,)))
-    self.gnn = GNN((core_con,), core_emb_shape)
+    self.gnn = GNN(deg=self.n_cores, out_shape=core_emb_shape)
+    self.gnn.setGraphs(graphs=(core_con,))
   
   def forward(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
     '''
