@@ -2,7 +2,7 @@ import copy
 import torch.optim as optim
 from scipy import stats
 from alg.qubitallocator import QubitAllocator
-from utils.allocationcost import cost
+from utils.allocutils import cost
 from sampler.circuitsampler import CircuitSampler
 
 

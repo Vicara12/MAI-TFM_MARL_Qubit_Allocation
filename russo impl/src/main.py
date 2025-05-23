@@ -1,5 +1,6 @@
 from sampler.randomcircuit import RandomCircuit
 from utils.plotter import drawCircuit, drawQubitAllocation
+from utils.allocutils import validate
 import torch
 
 
@@ -15,7 +16,10 @@ if __name__ == '__main__':
     (2, 1, 3, 0),
     (2, 3, 0, 1),
   )
-  circuit_slice_gates = (((0,1),(2,3)),((0,2),),((2,3),))
-  drawQubitAllocation(torch.Tensor(allocation).T,
-                      core_sizes=(1,1,2),
+  allocation = torch.Tensor(allocation).T
+  circuit_slice_gates = (((0,1),),((0,3),),((0,1),))
+  core_capacities = (1,1,2)
+  print(f"Solution is {'valid' if validate(allocation, circuit_slice_gates, core_capacities) else 'not valid'}")
+  drawQubitAllocation(allocation,
+                      core_capacities=core_capacities,
                       circuit_slice_gates=circuit_slice_gates)

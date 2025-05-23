@@ -40,18 +40,18 @@ def drawCircuit(circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...],
 
 
 def drawQubitAllocation(qubit_allocation: torch.Tensor,
-                        core_sizes: Tuple[int, ...]=None,
+                        core_capacities: Tuple[int, ...]=None,
                         circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...]=None,
                         figsize_scale: float=1.0):
     """ Draws the flow of qubit allocations across columns (time steps).
     
     Parameters:
-    - qubit_allocation: tensor in which each column indicates a qubit allocation for a time step and
-        each row indicates which logical qubit is assigned to a certain physical qubit.
-    - core_sizes (optional): size of each core. If provided the plot will contain horizontal
-        lines separating the physical qubits of each core. It is assumed that the qubits of the core
-        are consecutive.
-    - circuit_slice_gates: follows the CircuitSampler convention.
+      - qubit_allocation: tensor in which each column indicates a qubit allocation for a time step and
+          each row indicates which logical qubit is assigned to a certain physical qubit.
+      - core_capacities (optional): size of each core. If provided the plot will contain horizontal
+          lines separating the physical qubits of each core. It is assumed that the qubits of the core
+          are consecutive.
+      - circuit_slice_gates: follows the CircuitSampler convention.
     """
     Path = matplotlib.path.Path
     num_steps = qubit_allocation.shape[1]
@@ -63,10 +63,10 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
 
     _, ax = plt.subplots(figsize=(num_steps * figsize_scale, num_pq*num_pq/num_steps))
 
-    if core_sizes is not None:
-      assert (sum(core_sizes) == num_pq), "sum of core sizes does not match number of physical qubits"
+    if core_capacities is not None:
+      assert (sum(core_capacities) == num_pq), "sum of core sizes does not match number of physical qubits"
       core_line_pos = [0]
-      for core_size in core_sizes:
+      for core_size in core_capacities:
         core_line_pos.append(core_line_pos[-1]+core_size)
       core_line_pos = core_line_pos[1:-1]
       for cl_pos in core_line_pos:
