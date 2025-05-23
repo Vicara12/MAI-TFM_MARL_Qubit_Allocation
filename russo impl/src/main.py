@@ -15,4 +15,7 @@ if __name__ == '__main__':
     (2, 1, 3, 0),
     (2, 3, 0, 1),
   )
-  drawQubitAllocation(torch.Tensor(allocation).T, core_sizes=(1,1,2))
+  circuit_slice_gates = (((0,1),(2,3)),((0,2),),((2,3),))
+  drawQubitAllocation(torch.Tensor(allocation).T,
+                      core_sizes=(1,1,2),
+                      circuit_slice_gates=circuit_slice_gates)

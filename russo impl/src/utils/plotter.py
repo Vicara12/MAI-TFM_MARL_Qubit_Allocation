@@ -41,6 +41,7 @@ def drawCircuit(circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...],
 
 def drawQubitAllocation(qubit_allocation: torch.Tensor,
                         core_sizes: Tuple[int, ...]=None,
+                        circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...]=None,
                         figsize_scale: float=1.0):
     """ Draws the flow of qubit allocations across columns (time steps).
     
@@ -50,6 +51,7 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
     - core_sizes (optional): size of each core. If provided the plot will contain horizontal
         lines separating the physical qubits of each core. It is assumed that the qubits of the core
         are consecutive.
+    - circuit_slice_gates: follows the CircuitSampler convention.
     """
     Path = matplotlib.path.Path
     num_steps = qubit_allocation.shape[1]
@@ -69,6 +71,21 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
       core_line_pos = core_line_pos[1:-1]
       for cl_pos in core_line_pos:
         ax.hlines(y=num_pq-cl_pos-0.5, xmin=-0.3, xmax=num_steps+0.3, color='gray', linestyles='dotted', linewidth=1)
+    
+    if circuit_slice_gates is not None:
+      for t, circuit_slice in enumerate(circuit_slice_gates):
+         alloc_slice = qubit_allocation[:,t].squeeze().tolist()
+         for gate in circuit_slice:
+            pq0 = alloc_slice.index(gate[0])
+            pq1 = alloc_slice.index(gate[1])
+            verts = [(t - 0.3,       num_pq - pq0 - 1),
+                     (t - 0.3 - 0.2, num_pq - pq0 - 1),
+                     (t - 0.3 - 0.2, num_pq - pq1 - 1),
+                     (t - 0.3,       num_pq - pq1 - 1)]
+            codes = [Path.MOVETO, Path.CURVE4, Path.CURVE4, Path.CURVE4]
+            path = Path(verts, codes)
+            patch = patches.PathPatch(path, facecolor='none', edgecolor='black', lw=1.25, alpha=0.6)
+            ax.add_patch(patch)
 
     # Draw nodes and flows
     last_q_positions = {}
@@ -98,7 +115,7 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
                   patch = patches.PathPatch(path, facecolor='none', edgecolor=color, lw=2, alpha=0.5)
                   ax.add_patch(patch)
             last_q_positions[qubit] = (t, y)
-    ax.set_xlim(-0.5, num_steps - 0.5)
+    ax.set_xlim(-0.5 if circuit_slice_gates is None else -0.75, num_steps - 0.5)
     ax.set_ylim(-0.5, num_pq - 0.5)
     ax.set_xticks(range(num_steps))
     ax.set_yticks(range(num_pq))
