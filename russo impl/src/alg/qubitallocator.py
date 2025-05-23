@@ -70,7 +70,7 @@ class QubitAllocator(nn.Module):
     num_slices = len(circuit_slice_matrices)
     allocations = torch.zeros(size=(self.num_lq, num_slices))
     H_S, H_X = self.circuit_slice_encoder(circuit_slice_matrices, self.qubit_embs)
-    all_probs = []
+    all_log_probs = []
     for t, slice_gates in enumerate(circuit_slice_gates):
       # allocations is initially filled with -1, so at first iteration column 0 is fine.
       A_prev = allocations[:,max(0,t-1)].squeeze()
@@ -87,9 +87,10 @@ class QubitAllocator(nn.Module):
           distances = self.core_con[prev_cores,:].sum(dim=0)
         double = (len(q_tuple) == 2)
         core_probs = self.decoder(Ht_C, core_capacities, distances, H_X, H_S[t], q_embs, double)
+        core_probs = torch.distributions.Categorical(core_probs)
         # Select core from distribution and update allocations matrix and core capacities
-        core = core_probs.max() if greedy else torch.distributions.Categorical(core_probs).sample()
+        core = core_probs.max() if greedy else core_probs.sample()
         allocations[q_tuple,t] = core
         core_capacities[core] -= len(q_tuple)
-        all_probs.append(core_probs)
-    return allocations, all_probs
+        all_log_probs.append(core_probs.log_prob(core))
+    return allocations, all_log_probs
