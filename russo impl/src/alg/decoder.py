@@ -19,7 +19,7 @@ class Decoder(nn.Module):
   is for both qubits in the gate.
 
   Args:
-    - core_capacities: list that contains the number of qubits that can be held per core.
+    - core_capacities: rank 1 tensor that contains the number of qubits that can be held per core.
     - core_emb_size: length of the output core embedding, d_H in Ref. [1].
     - slice_emb_size: length of the slice embedding, d_E in Ref. [1].
 
@@ -28,10 +28,10 @@ class Decoder(nn.Module):
     (https://arxiv.org/abs/2406.11452).
       Enrico Russo, Maurizio Palesi, Davide Patti, Giuseppe Ascia, Vincenzo Catania. 2024.
   '''
-  def __init__(self, core_capacities: List[int], core_emb_size: int, slice_emb_size: int):
+  def __init__(self, core_capacities: torch.Tensor, core_emb_size: int, slice_emb_size: int):
     super().__init__()
     self.slice_emb_size = slice_emb_size
-    self.capacity_emb = nn.Embedding(max(core_capacities)+1, core_emb_size)
+    self.capacity_emb = nn.Embedding(core_capacities.max().item()+1, core_emb_size)
     # For now distance is binary (0 disconnected / 1 connected), but as there might be two qubits
     # and the distances add up then the possible values are 0, 1 and 2
     self.dist_emb = nn.Embedding(3, core_emb_size)

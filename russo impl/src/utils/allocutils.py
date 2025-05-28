@@ -15,7 +15,7 @@ def cost(allocations: torch.Tensor, core_con: torch.Tensor):
   num_slices = allocations.shape[1]
   cost = 0
   for i in range(num_slices-1):
-    cost += core_con[allocations[i].flatten(), allocations[i+1].flatten()].sum()
+    cost += core_con[allocations[:,i].flatten(), allocations[:,i+1].flatten()].sum()
   return cost.item()
 
 

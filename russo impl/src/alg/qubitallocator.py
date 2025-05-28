@@ -1,3 +1,4 @@
+import copy
 import torch
 import torch.nn as nn
 from typing import Tuple
@@ -17,8 +18,8 @@ class QubitAllocator(nn.Module):
     - num_enc_transf_heads: number of MHA heads used in each circuit encoder transformer.
     - core_con: matrix containing the core connectivity. Position (i,j), i != j, contains a 1 if
         core i is connected to core j, zero otherwise (no need of self-loops).
-    - core_capacities: tuple in which each element indicates the number of qubits its respective
-        core can hold.
+    - core_capacities: rank 1 tensor in which each element indicates the number of qubits its
+        respective core can hold.
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]
@@ -31,23 +32,23 @@ class QubitAllocator(nn.Module):
                      num_enc_transf: int,
                      num_enc_transf_heads: int,
                      core_con: torch.Tensor,
-                     core_capacities: Tuple[int, ...]):
+                     core_capacities: torch.Tensor):
+    super().__init__()
     self.num_lq = num_lq
-    self.core_capacities = core_capacities
-    self.core_con = core_con
+    self.register_buffer("core_con", copy.deepcopy(core_con))
+    self.register_buffer("core_capacities", copy.deepcopy(core_capacities))
     self.qubit_embs = nn.Parameter(torch.randn(num_lq, emb_size), requires_grad=True)
-    self.circuit_slice_encoder = CircuitSliceEncoder(num_lq=num_lq,
-                                                     emb_shape=emb_size,
+    self.circuit_slice_encoder = CircuitSliceEncoder(emb_shape=emb_size,
                                                      num_enc_transf=num_enc_transf,
                                                      num_enc_transf_heads=num_enc_transf_heads)
-    self.core_snapshot_encoder = CoreSnapshotEncoder(core_con=core_con,
+    self.core_snapshot_encoder = CoreSnapshotEncoder(core_con=self.core_con,
                                                      core_emb_shape=emb_size)
-    self.decoder = Decoder(core_capacities=core_capacities,
+    self.decoder = Decoder(core_capacities=self.core_capacities,
                            core_emb_size=emb_size,
                            slice_emb_size=emb_size)
   
 
-  @classmethod
+  @staticmethod
   def _getOrderedQubits(gates: Tuple[Tuple[int,int], ...], num_lq: int):
     ''' Returns the qubits in the correct order in order to be fed to the decoder.
 
@@ -61,26 +62,27 @@ class QubitAllocator(nn.Module):
 
 
   def forward(self, circuit_slice_gates: Tuple[Tuple[int,int], ...],
-                    circuit_slice_matrices: Tuple[torch.Tensor],
+                    circuit_slice_matrices: torch.Tensor,
                     greedy: bool):
-    assert (self.num_lq == circuit_slice_matrices[0].shape[0]), \
+    assert (self.num_lq == circuit_slice_matrices.shape[1]), \
             "matrix shape in circuit_slice_matrices does not match number of logical qubits"
-    assert (len(circuit_slice_gates) == len(circuit_slice_matrices)), \
+    assert (len(circuit_slice_gates) == circuit_slice_matrices.shape[0]), \
             "length of circuit_slice_gates does not match length of circuit_slice_matrices"
-    num_slices = len(circuit_slice_matrices)
-    allocations = torch.zeros(size=(self.num_lq, num_slices))
+    num_slices = circuit_slice_matrices.shape[0]
+    device = next(self.parameters()).device
+    allocations = torch.zeros(size=(self.num_lq, num_slices), dtype=int, device=device)
     H_S, H_X = self.circuit_slice_encoder(circuit_slice_matrices, self.qubit_embs)
     all_log_probs = []
     for t, slice_gates in enumerate(circuit_slice_gates):
       # allocations is initially filled with -1, so at first iteration column 0 is fine.
       A_prev = allocations[:,max(0,t-1)].squeeze()
       Ht_C = self.core_snapshot_encoder(A_prev, self.qubit_embs)
-      core_capacities = torch.tensor(self.core_capacities)
+      core_capacities = copy.deepcopy(self.core_capacities)
       for q_tuple in QubitAllocator._getOrderedQubits(slice_gates, self.num_lq):
         # Get qubit embedding if 1 qubit or mean of both if gate
         q_embs = self.qubit_embs[q_tuple,:].mean(dim=0)
         if t == 0:
-          distances = torch.zeros(size=(len(self.core_capacities),))
+          distances = torch.zeros_like(self.core_capacities)
         else:
           prev_cores = A_prev[q_tuple,] # For each qubit in q_tuple get its previous core allocation
           # Total distance of qubits in q_tuple to core c is the sum of individual distances
@@ -89,8 +91,9 @@ class QubitAllocator(nn.Module):
         core_probs = self.decoder(Ht_C, core_capacities, distances, H_X, H_S[t], q_embs, double)
         core_probs = torch.distributions.Categorical(core_probs)
         # Select core from distribution and update allocations matrix and core capacities
-        core = core_probs.max() if greedy else core_probs.sample()
+        core = core_probs.probs.argmax() if greedy else core_probs.sample()
         allocations[q_tuple,t] = core
+        core_capacities = core_capacities.clone() # So as to not overwrite grad
         core_capacities[core] -= len(q_tuple)
         all_log_probs.append(core_probs.log_prob(core))
     return allocations, all_log_probs

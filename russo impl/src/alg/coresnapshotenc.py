@@ -23,8 +23,8 @@ class CoreSnapshotEncoder(nn.Module):
     super().__init__()
     self.n_cores = core_con.shape[0]
     self.padding_emb = nn.Parameter(torch.zeros((core_emb_shape,)))
-    self.gnn = GNN(deg=self.n_cores, out_shape=core_emb_shape)
-    self.gnn.setGraphs(graphs=(core_con,))
+    self.gnn = GNN(emb_shape=core_emb_shape)
+    self.gnn.setGraphs(graphs=core_con.unsqueeze(0).float()) # Add batch dim at the front
   
   def forward(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
     '''
@@ -41,5 +41,5 @@ class CoreSnapshotEncoder(nn.Module):
         core_embs.append(q_embeddings[mask].max(dim=0)[0]) # Take max pool of all q embs. in core C
       else:
         core_embs.append(self.padding_emb) # If no qubits in core C append learnable padding emb.
-    core_embs = torch.stack(core_embs)
+    core_embs = torch.stack(core_embs).to(q_embeddings.device)
     return self.gnn(core_embs).squeeze() # Transform core embs through GNN and remove "batch" dim

@@ -13,9 +13,9 @@ class CircuitSliceEncoder(nn.Module):
   This class implements section III B 1 & 2 from Ref. [1].
 
   Args:
-    - num_lq: number of logical qubits in the circuit.
     - emb_shape: shape of the time slice embeddings, d_E in Ref. [1].
     - num_enc_transf: number of transformer blocks for the encoder, b in Ref. [1].
+    - num_enc_transf_heads: number of transformer heads per block in the encoder, b in Ref. [1].
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]
@@ -23,7 +23,7 @@ class CircuitSliceEncoder(nn.Module):
       Enrico Russo, Maurizio Palesi, Davide Patti, Giuseppe Ascia, Vincenzo Catania. 2024.
   '''
 
-  @classmethod
+  @staticmethod
   def getPositionalEmbedding(T, d_model):
     position = torch.arange(T).unsqueeze(1)  # [T, 1]
     div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
@@ -33,14 +33,13 @@ class CircuitSliceEncoder(nn.Module):
     return pe  # [T, d_model]
 
   def __init__(self,
-               num_lq: int,
                emb_shape: int,
                num_enc_transf: int,
                num_enc_transf_heads: int
       ):
     super().__init__()
     self.emb_shape = emb_shape
-    self.gnn = GNN(deg=num_lq, out_shape=emb_shape)
+    self.gnn = GNN(emb_shape=emb_shape)
     self.enc_transf = TransformerEncoder(num_layers=num_enc_transf,
                                          embed_dim=emb_shape,
                                          num_heads=num_enc_transf_heads,
@@ -56,12 +55,13 @@ class CircuitSliceEncoder(nn.Module):
       - H_S: encoded slice embeddings of shape: [T, d_H] where T = num. slices and d_H = d_E
       - H_X: circuit representation of shape d_H = d_E
     '''
+    device = next(self.parameters()).device
     T = len(circuit_slices)
-    self.gnn(graphs=circuit_slices)
+    self.gnn.setGraphs(graphs=circuit_slices)
     # Section III. B.1 InitEmbedding
     Ht_IQ = self.gnn(q_embeddings) # H_t^{(I,Q)} shape = [T, Q, d_E]
-    Ht_I = torch.max(Ht_IQ, dim=1)      # Max pool across qubit dimension, shape = [T, d_E]
-    Ht_I += CircuitSliceEncoder.getPositionalEmbedding(T, self.emb_shape)
+    Ht_I, _ = torch.max(Ht_IQ, dim=1)      # Max pool across qubit dimension, shape = [T, d_E]
+    Ht_I += CircuitSliceEncoder.getPositionalEmbedding(T, self.emb_shape).to(device)
     # Section III. B.2 EncoderBlocks
     H_S = self.enc_transf(Ht_I)  # shape = [T, d_E] (we force d_E = d_H)
     H_X = torch.mean(H_S, dim=0) # Circuit embedding, shape = [d_E]
