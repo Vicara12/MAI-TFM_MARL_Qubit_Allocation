@@ -9,7 +9,8 @@ from typing import Tuple
 
 def drawCircuit(circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...],
                 num_lq, title="",
-                figsize_scale: float=1.0):
+                figsize_scale: float=1.0,
+                show: bool=True):
   ''' Draw the quantum circuit with the time slices.
 
   Arguments follow the CircuitSampler convention.
@@ -42,7 +43,8 @@ def drawCircuit(circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...],
 def drawQubitAllocation(qubit_allocation: torch.Tensor,
                         core_capacities: Tuple[int, ...]=None,
                         circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...]=None,
-                        figsize_scale: float=1.0):
+                        figsize_scale: float=1.0,
+                        show: bool=True):
     """ Draws the flow of qubit allocations across columns (time steps).
     
     Parameters:
@@ -124,4 +126,5 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
     ax.set_ylabel("Physical qubit")
     ax.set_aspect(num_pq/num_steps)
     plt.grid(False)
-    plt.show()
+    if show:
+      plt.show()

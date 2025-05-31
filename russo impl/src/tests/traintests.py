@@ -23,7 +23,7 @@ def trainDemo(num_lq: int,
               batch_size: int):
   core_con = torch.ones((num_cores,num_cores), dtype=int) - torch.eye(num_cores, dtype=int)
   core_capacities = torch.tensor([num_lq//num_cores]*num_cores)
-  device='cuda'
+  device='cpu'
   if device == 'cuda' and not torch.cuda.is_available():
     raise Exception("cuda selected but not available")
   random_sampler = RandomCircuit(num_lq=num_lq, num_slices=num_slices)

@@ -42,7 +42,34 @@ class Reinforce:
     R = cost(allocs, self.qubit_allocator.core_con)
     R_BL = cost(allocs_BL, qubit_allocator_BL.core_con)
     return R, R_BL, log_probs
+  
 
+  def _trainBatch(self, batch_size: int, qubit_allocator_BL: QubitAllocator, device: str, opt: optim.Adam):
+    loss = 0
+    all_R = []
+    all_R_bl = []
+    for b in range(batch_size):
+      R, R_BL,log_probs = self._predictBoth(qubit_allocator_BL, use_greedy=False, device=device)
+      all_R.append(R)
+      all_R_bl.append(R_BL)
+      for log_prob in log_probs:
+        loss += (R - R_BL)*log_prob
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    return all_R, all_R_bl
+  
+
+  def _validation(self, num_val_runs: int, qubit_allocator_BL: QubitAllocator, device: str):
+    all_R = []
+    all_R_bl = []
+    self.qubit_allocator.eval()
+    for v in range(num_val_runs):
+      R, R_BL,_ = self._predictBoth(qubit_allocator_BL, use_greedy=True, device=device)
+      all_R.append(R)
+      all_R_bl.append(R_BL)
+    return all_R, all_R_bl
+  
 
   def train(self, epochs: int,
                   steps: int,
@@ -68,49 +95,39 @@ class Reinforce:
     qubit_allocator_BL.eval() # We want this model to be fixed
     opt = optim.Adam(self.qubit_allocator.parameters(), lr=lr)
 
-    res_format = lambda Rs, Rbls: f"R={sum(Rs)/len(Rs):.02f} R_bl={sum(Rbls)/len(Rbls):.02f}"
     l_ep = 1+floor(log10(epochs)) # number of digits in epochs
     l_st = 1+floor(log10(steps))  # number of digits in steps
+    res_format = lambda Rs, Rbls: f"R={sum(Rs)/len(Rs):.02f} R_bl={sum(Rbls)/len(Rbls):.02f}"
+    fmt_step = lambda t: f"{t+1:{l_st}d}/{steps}"
+    fmt_res = lambda Rs, Rbls, e, t_str: f"[{e+1:{l_ep}d}/{epochs:},{t_str}] {res_format(Rs, Rbls)}"
 
     history_train = []
     history_val = []
 
-    for e in range(epochs):
-      self.qubit_allocator.train()
-      epoch_history_train = []
-      for t in range(steps):
-        torch.autograd.set_detect_anomaly(True)
-        loss = 0
-        all_R = []
-        all_R_bl = []
-        for b in range(batch_size):
-          R, R_BL,log_probs = self._predictBoth(qubit_allocator_BL, use_greedy=False, device=device)
-          all_R.append(R)
-          all_R_bl.append(R_BL)
-          for log_prob in log_probs:
-            loss += (R - R_BL)*log_prob
+    try:
+      for e in range(epochs):
+        self.qubit_allocator.train()
+        epoch_history_train = []
+        for t in range(steps):
+          all_R, all_R_bl = self._trainBatch(batch_size=batch_size,
+                                            qubit_allocator_BL=qubit_allocator_BL,
+                                            device=device,
+                                            opt=opt)
+          if verbose:
+            print(fmt_res(all_R, all_R_bl, e, fmt_step(t)))
+          epoch_history_train.append(sum(all_R)/len(all_R))
+        all_R, all_R_bl = self._validation(num_val_runs=num_val_runs,
+                                          qubit_allocator_BL=qubit_allocator_BL,
+                                          device=device)
+        history_train.append(epoch_history_train)
+        history_val.append(sum(all_R)/len(all_R))
+        _, p_value = stats.ttest_rel(all_R, all_R_bl, alternative='less')
+        if p_value < repl_significance:
+          qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
         if verbose:
-          print(f"[{e+1:{l_ep}d}/{epochs:{l_ep}d},{t+1:{l_st}d}/{steps:{l_st}d}] {res_format(all_R, all_R_bl)}")
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        epoch_history_train.append(sum(all_R)/len(all_R))
-      all_R = []
-      all_R_bl = []
-      self.qubit_allocator.eval()
-      for v in range(num_val_runs):
-        R, R_BL,_ = self._predictBoth(qubit_allocator_BL, use_greedy=True, device=device)
-        all_R.append(R)
-        all_R_bl.append(R_BL)
-      history_train.append(epoch_history_train)
-      history_val.append(sum(all_R)/len(all_R))
-      if verbose:
-        print(f"[{e+1:{l_ep}d}/{epochs:{l_ep}d},val] {res_format(all_R, all_R_bl)}")
-      _, p_value = stats.ttest_rel(all_R, all_R_bl, alternative='less')
-      if verbose:
-        print(f"p_v={p_value:4f} (sig: {repl_significance}) {'improved' if p_value < repl_significance else 'no change'}")
-      if p_value < repl_significance:
-        qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
+          print(f"{fmt_res(all_R, all_R_bl, e, "val")}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
+    except KeyboardInterrupt:
+      pass
     
     return dict(
       train_params = dict(

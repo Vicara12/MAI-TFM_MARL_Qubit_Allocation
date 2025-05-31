@@ -10,14 +10,17 @@ def getTrainFolderPath():
   return join(dirname(dirname(dirname(os.path.abspath(__file__)))), "trained")
 
 
-def getFolderName(num_lq: int, sampler: str):
-  return f"{sampler}_{num_lq}nlq_" + datetime.now().strftime("%y%m%d_%H%M%S")
+def genTrainFolder(num_lq: int, sampler: str):
+  train_path = getTrainFolderPath()
+  fodler_name = f"{sampler}_{num_lq}nlq_" + datetime.now().strftime("%y%m%d_%H%M%S")
+  os.makedirs(join(train_path, fodler_name), exist_ok=True)
+  return fodler_name
 
 
 def storeTrain(allocator: QubitAllocator, train_data: Dict, folder_name: Union[str, None]):
   path = getTrainFolderPath()
   if folder_name is None:
-    folder = getFolderName()
+    folder = genTrainFolder()
   with open(join(path, folder, "train_params.json"), "w") as f:
     json.dump(train_data, f, indent=2)
   torch.save(allocator, join(path, folder, "model.pth"))
