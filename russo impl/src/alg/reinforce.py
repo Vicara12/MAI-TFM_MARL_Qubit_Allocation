@@ -72,8 +72,12 @@ class Reinforce:
     l_ep = 1+floor(log10(epochs)) # number of digits in epochs
     l_st = 1+floor(log10(steps))  # number of digits in steps
 
+    history_train = []
+    history_val = []
+
     for e in range(epochs):
       self.qubit_allocator.train()
+      epoch_history_train = []
       for t in range(steps):
         torch.autograd.set_detect_anomaly(True)
         loss = 0
@@ -90,6 +94,7 @@ class Reinforce:
         opt.zero_grad()
         loss.backward()
         opt.step()
+        epoch_history_train.append(sum(all_R)/len(all_R))
       all_R = []
       all_R_bl = []
       self.qubit_allocator.eval()
@@ -97,11 +102,26 @@ class Reinforce:
         R, R_BL,_ = self._predictBoth(qubit_allocator_BL, use_greedy=True, device=device)
         all_R.append(R)
         all_R_bl.append(R_BL)
+      history_train.append(epoch_history_train)
+      history_val.append(sum(all_R)/len(all_R))
       if verbose:
         print(f"[{e+1:{l_ep}d}/{epochs:{l_ep}d},val] {res_format(all_R, all_R_bl)}")
-      _, p_value = stats.ttest_rel(all_R, all_R_bl, alternative='greater')
+      _, p_value = stats.ttest_rel(all_R, all_R_bl, alternative='less')
       if verbose:
         print(f"p_v={p_value:4f} (sig: {repl_significance}) {'improved' if p_value < repl_significance else 'no change'}")
       if p_value < repl_significance:
-        self.qubit_allocator = copy.deepcopy(qubit_allocator_BL)
-    pass
+        qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
+    
+    return dict(
+      train_params = dict(
+        epochs=epochs,
+        steps=steps,
+        batch_size=batch_size,
+        repl_significance=repl_significance,
+        lr=lr,
+        num_val_runs=num_val_runs
+      ),
+      qubit_allocator=str(self.qubit_allocator),
+      history_train=history_train,
+      history_val=history_val
+    )

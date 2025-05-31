@@ -34,3 +34,11 @@ class RandomCircuit(CircuitSampler):
         a,b = random.sample(range(0,self.num_lq_),2)
       circuit_slice_gates.append(tuple(slice_gates))
     return tuple(circuit_slice_gates), circuit_slice_matrices
+  
+
+  def __str__(self):
+    if self.num_slices is Callable:
+      ns = str(self.num_slices())
+    else:
+      ns = str(self.num_slices)
+    return f"RandomCircuit(num_lq={self.num_lq}, num_slices={ns})"

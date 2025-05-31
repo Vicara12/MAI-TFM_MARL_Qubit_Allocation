@@ -28,3 +28,7 @@ class CircuitSampler(ABC):
       - circuit_slice_matrices
     '''
     raise NotImplementedError("implement sampler for class")
+  
+  @abstractmethod
+  def __str__(self) -> str:
+    raise NotImplementedError("implement __str__ method for class")
