@@ -37,7 +37,8 @@ def drawCircuit(circuit_slice_gates: Tuple[Tuple[Tuple[int, int], ...], ...],
   ax.invert_yaxis()
   ax.set_title(title)
   plt.tight_layout()
-  plt.show()
+  if show:
+    plt.show()
 
 
 def drawQubitAllocation(qubit_allocation: torch.Tensor,

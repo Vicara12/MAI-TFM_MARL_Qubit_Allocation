@@ -10,9 +10,9 @@ def getTrainFolderPath():
   return join(dirname(dirname(dirname(os.path.abspath(__file__)))), "trained")
 
 
-def genTrainFolder(num_lq: int, sampler: str):
+def genTrainFolder(num_lq: int):
   train_path = getTrainFolderPath()
-  fodler_name = f"{sampler}_{num_lq}nlq_" + datetime.now().strftime("%y%m%d_%H%M%S")
+  fodler_name = f"{num_lq}lq_" + datetime.now().strftime("%y%m%d_%H%M%S")
   os.makedirs(join(train_path, fodler_name), exist_ok=True)
   return fodler_name
 

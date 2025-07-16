@@ -9,9 +9,10 @@ def basicTrainParams():
     num_lq = 16,
     num_slices = 15,
     num_cores = 4,
-    epochs = 1,
-    steps = 10,
-    batch_size = 16
+    epochs = 10,
+    steps = 1,
+    batch_size = 16,
+    checkpoint_each = 1,
   )
 
 
@@ -20,10 +21,11 @@ def trainDemo(num_lq: int,
               num_cores: int,
               epochs: int,
               steps: int,
-              batch_size: int):
+              batch_size: int,
+              checkpoint_each: int):
   core_con = torch.ones((num_cores,num_cores), dtype=int) - torch.eye(num_cores, dtype=int)
   core_capacities = torch.tensor([num_lq//num_cores]*num_cores)
-  device='cpu'
+  device='cuda'
   if device == 'cuda' and not torch.cuda.is_available():
     raise Exception("cuda selected but not available")
   random_sampler = RandomCircuit(num_lq=num_lq, num_slices=num_slices)
@@ -40,4 +42,6 @@ def trainDemo(num_lq: int,
                   batch_size=batch_size,
                   repl_significance=0.1,
                   lr=1e-4,
-                  num_val_runs=50)
+                  num_val_runs=50,
+                  checkpoint_each=checkpoint_each,
+                  save_at_end=True)

@@ -1,9 +1,14 @@
 import copy
+import os
 from math import log10, floor
 import torch.optim as optim
 from scipy import stats
+from typing import Union
+import matplotlib.pyplot as plt
 from alg.qubitallocator import QubitAllocator
 from utils.allocutils import cost
+from utils.modelutils import genTrainFolder, getTrainFolderPath
+from utils.plotter import drawCircuit, drawQubitAllocation
 from sampler.circuitsampler import CircuitSampler
 
 
@@ -29,9 +34,12 @@ class Reinforce:
       Enrico Russo, Maurizio Palesi, Davide Patti, Giuseppe Ascia, Vincenzo Catania. 2024.    
   '''
   def __init__(self, circuit_sampler: CircuitSampler,
-               qubit_allocator: QubitAllocator):
+               qubit_allocator: QubitAllocator,
+               train_folder: Union[str, None]=None):
     self.circuit_sampler = circuit_sampler
     self.qubit_allocator = qubit_allocator
+    self.train_path = getTrainFolderPath()
+    self.train_folder = train_folder
   
 
   def _predictBoth(self, qubit_allocator_BL: QubitAllocator, use_greedy: bool, device: str):
@@ -69,7 +77,33 @@ class Reinforce:
       all_R.append(R)
       all_R_bl.append(R_BL)
     return all_R, all_R_bl
-  
+
+
+  def _genCheckpoint(self, subfolder: Union[str, None], device: str):
+    if self.train_folder is None:
+      self.train_folder = genTrainFolder(self.qubit_allocator.num_lq)
+    if subfolder is None:
+      folder = os.path.join(self.train_path, self.train_folder)
+    else:
+      folder = os.path.join(self.train_path, self.train_folder, subfolder)
+    os.makedirs(folder)
+    # Save model
+    torch.save(self.qubit_allocator, os.path.join(folder, "model.pth"))
+    # Generate a circuit and allocate qubits as a test
+    self.qubit_allocator.eval()
+    circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sample()
+    circuit_slice_matrices = circuit_slice_matrices.to(device)
+    allocs, _ = self.qubit_allocator(circuit_slice_gates, circuit_slice_matrices, greedy=True)
+    R = cost(allocs, self.qubit_allocator.core_con)
+    # Save figures of qubit allocations
+    plt.clf()
+    drawCircuit(circuit_slice_gates, self.qubit_allocator.num_lq, show=False)
+    plt.savefig(os.path.join(folder, "circuit.svg"))
+    plt.clf()
+    drawQubitAllocation(allocs.cpu(), self.qubit_allocator.core_capacities.cpu(), circuit_slice_gates, show=False)
+    plt.savefig(os.path.join(folder, f"allocations_cost_{R}.svg"))
+    plt.clf()
+
 
   def train(self, epochs: int,
                   steps: int,
@@ -77,7 +111,9 @@ class Reinforce:
                   repl_significance: float,
                   lr: float,
                   num_val_runs: int = 20,
-                  verbose: bool = True):
+                  verbose: bool = True,
+                  checkpoint_each: Union[None, int] = None,
+                  save_at_end: bool = True):
     ''' Train the qubit_allocator object.
 
     This function assumes that the model is already at the target device.
@@ -126,8 +162,13 @@ class Reinforce:
           qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
         if verbose:
           print(f"{fmt_res(all_R, all_R_bl, e, "val")}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
+        if checkpoint_each is not None and (e+1)%checkpoint_each == 0:
+          self._genCheckpoint(subfolder=f"{e}_R_{int(sum(all_R)/len(all_R))}", device=device)
     except KeyboardInterrupt:
       pass
+
+    if save_at_end:
+      self._genCheckpoint(subfolder=None, device=device)
     
     return dict(
       train_params = dict(

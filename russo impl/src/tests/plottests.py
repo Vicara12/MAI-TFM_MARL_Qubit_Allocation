@@ -16,8 +16,8 @@ def plottingDemo():
     (2, 3, 0, 1),
   )
   allocation = torch.Tensor(allocation).T
-  circuit_slice_gates = (((0,1),),((0,3),),((0,1),))
-  core_capacities = (1,1,2)
+  circuit_slice_gates = (((0,1),),((0,3),(1,2)),((0,1),))
+  core_capacities = (2,2)
   print(f"Solution is {'valid' if validate(allocation, circuit_slice_gates, core_capacities) else 'not valid'}")
   drawQubitAllocation(allocation,
                       core_capacities=core_capacities,
