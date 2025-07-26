@@ -12,7 +12,7 @@ def basicTrainParams():
     epochs = 10,
     steps = 1,
     batch_size = 16,
-    checkpoint_each = 1,
+    checkpoint_each = 10,
   )
 
 
