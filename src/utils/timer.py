@@ -95,6 +95,8 @@ class Timer:
   
   @staticmethod
   def get(name: str) -> Self:
+    ''' Get a Timer instance by name.
+    '''
     if name not in Timer.INSTANCES.keys():
       return Timer(name)
     return Timer.INSTANCES[name]
