@@ -1,4 +1,5 @@
-docs
+docs/papers
+docs/russo\ impl/russo_notes.md
 .vscode
 **/__pycache__/**
 venv
