@@ -29,13 +29,14 @@ class GNN(nn.Module):
     
   
   def setGraphs(self, graphs: torch.Tensor):
-    ''' Set the graphs used for the GNN as a 3D tensor of shape [T,Q,Q]. No self-loops.
+    ''' Set the graphs used for the GNN as a 3D tensor of shape [T,Q,Q] or [B,T,Q,Q]. No self-loops.
     '''
     assert (graphs.diagonal(dim1=-2,dim2=-1) == 0).all(), "diagonal of graphs should be zeros (no self-loops)"
-    assert (len(graphs.shape) == 3), "graphs should be a [B,N,N] tensor"
-    assert (graphs.shape[1] == graphs.shape[2]), "last two dims of shape should match"
-    self.T = graphs.shape[0]
-    self.N = graphs.shape[1]
+    assert len(graphs.shape) in (3,4), "graphs should be a [B,T,Q,Q] tensor (qubit graphs) or a [B,N,N] tensor (qubit cores)"
+    assert (graphs.shape[-2] == graphs.shape[-1]), "last two dims of shape should match"
+    self.B = graphs.shape[0]
+    self.T = graphs.shape[1] if len(graphs.shape) == 4 else self.B
+    self.N = graphs.shape[-1]
     dev = graphs.device
     # Handle buffer registration and prevent repeated attribute error
     if "laplacians" in self._buffers:
@@ -49,9 +50,10 @@ class GNN(nn.Module):
     # Below I have a batch of adjacency graphs (that is, a 3D tensor), and I compute the Laplacian
     # of each adjacency graph in batch. If at any point it looks confusing just keep in mind that
     # I'm applying the same operation to all matrices in the batch
-    self.laplacians += torch.eye(self.N, device=dev).repeat(self.T, 1, 1) # Add self loops to all graphs in batch
+    repeats = [self.T, 1, 1] if len(graphs.shape) == 3 else [self.B, self. T, 1, 1]
+    self.laplacians += torch.eye(self.N, device=dev).repeat(*repeats) # Add self loops to all graphs in batch
     D_sqrt = torch.diag_embed(torch.pow(torch.sum(self.laplacians, axis=-1),-0.5))
-    self.laplacians = torch.bmm(torch.bmm(D_sqrt, self.laplacians), D_sqrt) # D^{-0.5} * Z * D^{-0.5}
+    self.laplacians = D_sqrt @ self.laplacians @ D_sqrt # D^{-0.5} * Z * D^{-0.5}
     
 
   def clearGraphs(self):
@@ -60,12 +62,13 @@ class GNN(nn.Module):
   
   def forward(self, X) -> torch.Tensor:
     '''
-    X shape: [Q, E] where Q = num logical qubits, E = qubit embedding dimension
-    Returns [T, Q, O] where T = num slices, Q = num logical qubits, O = output embedding dimension
+    X shape: [B, Q, E] where Q = num logical qubits, E = qubit embedding dimension
+    Returns [B, T, Q, O] where T = num slices, Q = num logical qubits, O = output embedding dimension
+    or alternatively [B, T, C, O] where C = number of cores and O = output embedding dimension.
     '''
     if 'laplacians' not in self._buffers:
       raise Exception("graphs have not been set, call setGraphs before forward")
-    # This performs L_t @ X @ W for all t in batch
-    X = X.unsqueeze(0).expand(self.T, -1, -1) # shape [T, Q, d_in]
-    H = torch.bmm(self.laplacians, X)    # [T, Q, d_in]
-    return self.fc(H)                    # [T, Q, d_out]
+    # This performs L_t @ X @ W
+    X = X.unsqueeze(1).expand(-1, self.T, -1, -1) # shape [B, T, Q, d_in]
+    H = self.laplacians @ X # [B, T, Q, d_in] - uses broadcasting 
+    return self.fc(H) # [B, T, Q, d_out]

@@ -1,7 +1,7 @@
 import copy
 import torch
 import torch.nn as nn
-from typing import Tuple
+from typing import Sequence, Tuple
 from russo.alg.circuitencoder import CircuitSliceEncoder
 from russo.alg.coresnapshotenc import CoreSnapshotEncoder
 from russo.alg.decoder import Decoder
@@ -49,51 +49,95 @@ class QubitAllocator(nn.Module):
   
 
   @staticmethod
-  def _getOrderedQubits(gates: Tuple[Tuple[int,int], ...], num_lq: int):
+  def _getOrderedQubits(gates: Sequence[Sequence[Tuple[int,int]]], num_lq: int):
     ''' Returns the qubits in the correct order in order to be fed to the decoder.
 
+    Input is a tuple of tuples, where the first dimension is the batch dimension. 
     The qubits are returned as a tuple of tuples. Each item contains either two elements for the
     qubits that belong to a gate in this time slice or a single element when the qubits are free.
     Pairs of qubits that form gates are returned first, followed by free qubits.
     '''
-    qubits_in_gates = set(qubit for gate in gates for qubit in gate)
-    qubits_not_in_gates = set(range(num_lq)) - qubits_in_gates
-    return gates + tuple((qubit,) for qubit in qubits_not_in_gates)
-
+    #TODO: this is not efficient, we should speed it up with Cython or similar.
+    out = []
+    for batch_elem_gates in gates:
+        qubits_in_gates = set(q for gate in batch_elem_gates for q in gate)
+        qubits_not_in_gates = set(range(num_lq)) - qubits_in_gates
+        # preserve gate order, free qubits in order
+        ordered = batch_elem_gates + tuple((qubit,) for qubit in sorted(qubits_not_in_gates))
+        out.append(ordered)
+    return out
+  
 
   def forward(self, circuit_slice_gates: Tuple[Tuple[int,int], ...],
                     circuit_slice_matrices: torch.Tensor,
                     greedy: bool):
-    assert (self.num_lq == circuit_slice_matrices.shape[1]), \
+    B, T, Q, _ = circuit_slice_matrices.shape
+    assert (self.num_lq == Q), \
             "matrix shape in circuit_slice_matrices does not match number of logical qubits"
-    assert (len(circuit_slice_gates) == circuit_slice_matrices.shape[0]), \
+    assert (len(circuit_slice_gates[0]) == T), \
             "length of circuit_slice_gates does not match length of circuit_slice_matrices"
-    num_slices = circuit_slice_matrices.shape[0]
     device = next(self.parameters()).device
-    allocations = torch.zeros(size=(self.num_lq, num_slices), dtype=int, device=device)
+    allocations = torch.zeros(size=(B, self.num_lq, T), dtype=int, device=device)
     H_S, H_X = self.circuit_slice_encoder(circuit_slice_matrices, self.qubit_embs)
     all_log_probs = []
-    for t, slice_gates in enumerate(circuit_slice_gates):
-      # allocations is initially filled with -1, so at first iteration column 0 is fine.
-      A_prev = allocations[:,max(0,t-1)].squeeze()
-      Ht_C = self.core_snapshot_encoder(A_prev, self.qubit_embs)
-      core_capacities = copy.deepcopy(self.core_capacities)
-      for q_tuple in QubitAllocator._getOrderedQubits(slice_gates, self.num_lq):
-        # Get qubit embedding if 1 qubit or mean of both if gate
-        q_embs = self.qubit_embs[q_tuple,:].mean(dim=0)
-        if t == 0:
-          distances = torch.zeros_like(self.core_capacities)
-        else:
-          prev_cores = A_prev[q_tuple,] # For each qubit in q_tuple get its previous core allocation
-          # Total distance of qubits in q_tuple to core c is the sum of individual distances
-          distances = self.core_con[prev_cores,:].sum(dim=0)
-        double = (len(q_tuple) == 2)
-        core_probs = self.decoder(Ht_C, core_capacities, distances, H_X, H_S[t], q_embs, double)
-        core_probs = torch.distributions.Categorical(core_probs)
-        # Select core from distribution and update allocations matrix and core capacities
-        core = core_probs.probs.argmax() if greedy else core_probs.sample()
-        allocations[q_tuple,t] = core
-        core_capacities = core_capacities.clone() # So as to not overwrite grad
-        core_capacities[core] -= len(q_tuple)
-        all_log_probs.append(core_probs.log_prob(core))
-    return allocations, all_log_probs
+
+    for t in range(T):
+      # Allocations is initially filled with 0, so at first iteration column 0 is fine.
+      slice_gates = [gates[t] for gates in circuit_slice_gates]
+      A_prev = allocations[:, :, max(0,t-1)].squeeze()
+      Ht_C = self.core_snapshot_encoder(A_prev, self.qubit_embs).squeeze(1) # [B, C, d_H] where T = 1
+
+      adj = circuit_slice_matrices[:, t]
+      in_gate = (adj.sum(dim=1) > 0).squeeze()  # [B, Q] mask
+      idxs = torch.arange(Q, device=device).unsqueeze(0).expand(B, Q)  # [B, Q]
+      # For each qubit in the slice, if it is in a gate, its key is idx, otherwise it is Q + idx
+      keys = (~in_gate).to(torch.long) * Q + idxs   # [B, Q]
+      perm = keys.argsort(dim=1) 
+      # Reorder A_prev according to the keys
+      A_prev = torch.gather(A_prev, 1, perm) # [B, Q]
+
+      #TODO: This code can be a bit confusing. However 
+      first_q = torch.gather(idxs, 1, perm) # the qubit index for each slot
+      partner = adj.argmax(-1) # for gate slots it's the unique neighbor, else -1
+      second_q = torch.where(in_gate, partner, torch.full_like(partner, -1)) # [B, Q]
+      second_q = torch.gather(second_q, 1, perm) # [B, Q]
+
+      emb1 = self.qubit_embs[first_q] # [B, Q, d_E]
+      emb2 = self.qubit_embs[second_q.clamp(min=0)] # [B, Q, dE]
+      is_pair = (second_q >= 0)  # [B, Q]
+      q_embs = torch.where(is_pair.unsqueeze(-1), (emb1 + emb2) * 0.5, emb1)  # [B, Q, d_E]
+
+      # Compute the distances to the cores
+      if t == 0:
+          distances = torch.zeros((B, Q, self.core_capacities.shape[0]), device=device)
+      else:
+        p0 = A_prev # [B, Q]
+        p1 = torch.gather(A_prev, 1, second_q.clamp(min=0))
+        d0 = self.core_con[p0] # [B, Q, C]
+        d1 = self.core_con[p1] # [B, Q, C]
+        distances = d0 + d1 * is_pair.unsqueeze(-1)
+
+      # Get context
+      core_capacities = self.core_capacities.unsqueeze(0).expand(B, -1).clone() # [B, C]
+      HS_t = H_S[:, t]
+
+      for s in range(Q):
+        emb_s = q_embs[:, s] # [B, emb]
+        dist_s = distances[:, s] # [B, C]
+        pair_s = is_pair[:, s] # [B] bool
+
+        logits = self.decoder(Ht_C, core_capacities, dist_s, H_X, HS_t, emb_s, pair_s)  # [B, C]
+        cat = torch.distributions.Categorical(logits=logits)
+        choice = cat.probs.argmax(1) if greedy else cat.sample()
+        all_log_probs.append(cat.log_prob(choice))
+
+        allocations[:, first_q[:, s], t] = choice
+        mask2 = pair_s.nonzero(as_tuple=True)[0]
+        if mask2.numel():
+            allocations[mask2, second_q[mask2, s], t] = choice[mask2]
+        core_capacities[torch.arange(B, device=device), choice] -= (1 + pair_s.long())
+
+    return allocations, torch.stack(all_log_probs, dim=1)  # [B, Q, T], [B, Q*T]
+
+
+  

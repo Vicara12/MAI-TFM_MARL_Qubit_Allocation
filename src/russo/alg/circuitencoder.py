@@ -31,6 +31,7 @@ class CircuitSliceEncoder(nn.Module):
     pe[:, 0::2] = torch.sin(position * div_term)
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe  # [T, d_model]
+  
 
   def __init__(self,
                emb_shape: int,
@@ -43,26 +44,29 @@ class CircuitSliceEncoder(nn.Module):
     self.enc_transf = TransformerEncoder(num_layers=num_enc_transf,
                                          embed_dim=emb_shape,
                                          num_heads=num_enc_transf_heads,
-                                         ff_hiden_dim=emb_shape,
+                                         ff_hidden_dim=emb_shape,
                                          dropout=0.0)
   
   def forward(self, circuit_slices: Tuple[torch.Tensor], q_embeddings: torch.Tensor) -> torch.Tensor:
     '''
     Args:
-      - circuit_slices: adjacency matrix of gate connections for each time slice in the circuit.
+      - circuit_slices: adjacency matrix of gate connections for each time slice in the circuit, with shape [B, T, Q, Q].
       - q_embeddings shape: [Q, d_E] where Q = number of logical qubits, d_E slice emb. dim.
     Returns:
       - H_S: encoded slice embeddings of shape: [T, d_H] where T = num. slices and d_H = d_E
       - H_X: circuit representation of shape d_H = d_E
     '''
+    B, T, _, _ = circuit_slices.shape  # Number of time slices
+    B = circuit_slices.shape[0]  # Batch size
     device = next(self.parameters()).device
-    T = len(circuit_slices)
     self.gnn.setGraphs(graphs=circuit_slices)
     # Section III. B.1 InitEmbedding
-    Ht_IQ = self.gnn(q_embeddings) # H_t^{(I,Q)} shape = [T, Q, d_E]
-    Ht_I, _ = torch.max(Ht_IQ, dim=1)      # Max pool across qubit dimension, shape = [T, d_E]
+    if q_embeddings.shape[0] != circuit_slices.shape[0]:
+      q_embeddings = q_embeddings.unsqueeze(0).expand(B, -1, -1)  # [B, Q, d_E]
+    Ht_IQ = self.gnn(q_embeddings) # H_t^{(I,Q)} shape = [B, T, Q, d_E]
+    Ht_I, _ = torch.max(Ht_IQ, dim=2)   # Max pool across qubit dimension, shape = [B, T, d_E]
     Ht_I += CircuitSliceEncoder.getPositionalEmbedding(T, self.emb_shape).to(device)
     # Section III. B.2 EncoderBlocks
-    H_S = self.enc_transf(Ht_I)  # shape = [T, d_E] (we force d_E = d_H)
-    H_X = torch.mean(H_S, dim=0) # Circuit embedding, shape = [d_E]
+    H_S = self.enc_transf(Ht_I).expand(B, -1, -1)  # shape = [B, T, d_E] (we force d_E = d_H)
+    H_X = torch.mean(H_S, dim=1) # Circuit embedding, shape = [B, d_E]
     return H_S, H_X

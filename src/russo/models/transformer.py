@@ -5,7 +5,8 @@ import torch.nn as nn
 class TransformerEncoderBlock(nn.Module):
   def __init__(self, embed_dim: int, num_heads: int, ff_hidden_dim: int, dropout: float = 0.1):
     super().__init__()
-    self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout)
+    # We use batch_first=True to have input shape [B, T, E] 
+    self.attention = nn.MultiheadAttention(embed_dim, num_heads, dropout=dropout, batch_first=True)
     self.ff = nn.Sequential(nn.Linear(embed_dim, ff_hidden_dim),
                             nn.ReLU(),
                             nn.Linear(ff_hidden_dim, embed_dim))
@@ -14,7 +15,7 @@ class TransformerEncoderBlock(nn.Module):
     self.dropout = nn.Dropout(dropout)
   
   def forward(self, X: torch.Tensor) -> torch.Tensor:
-    # X shape: [T, B, E] where T = num_slices, B = batch, E = embed_dim
+    # X shape: [B, T, E] where B = batch size, T = number of slices, E = embed_dim
     attn_out, _ = self.attention(X, X, X)
     X = self.norm1(X + self.dropout(attn_out))
     ff_out = self.ff(X)
@@ -23,14 +24,14 @@ class TransformerEncoderBlock(nn.Module):
 
 class TransformerEncoder(nn.Module):
   def __init__(self, num_layers: int, embed_dim: int, num_heads: int,
-               ff_hiden_dim: int, dropout: float = 0.1):
+               ff_hidden_dim: int, dropout: float = 0.1):
     super().__init__()
     self.layers = nn.ModuleList([
-      TransformerEncoderBlock(embed_dim, num_heads, ff_hiden_dim) for _ in range(num_layers)
+      TransformerEncoderBlock(embed_dim, num_heads, ff_hidden_dim) for _ in range(num_layers)
     ])
   
   def forward(self, X: torch.Tensor) -> torch.Tensor:
-    # X shape: [T, B, E] where T = num_slices, B = batch, E = embed_dim
+    # X shape: [B, T, E] where B = batch size, T = num slices, E = embed_dim
     for layer in self.layers:
       X = layer(X)
     return X

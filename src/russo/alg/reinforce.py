@@ -41,10 +41,16 @@ class Reinforce:
     self.train_path = getTrainFolderPath("russo")
     self.train_folder = train_folder
   
-
-  def _predictBoth(self, qubit_allocator_BL: QubitAllocator, use_greedy: bool, device: str):
-    circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sample()
+  def sampleCircuitBatch(self, batch_size, device: str):
+    ''' Samples a batch of circuits and return the circuit slice gates and matrices. '''
+    circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sampleBatch(batch_size)
     circuit_slice_matrices = circuit_slice_matrices.to(device)
+    return circuit_slice_gates, circuit_slice_matrices
+  
+  def _predictBoth(self, qubit_allocator_BL: QubitAllocator, batch_size=256, use_greedy: bool=False, device: str='cuda'):
+    #circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sample()
+    #circuit_slice_matrices = circuit_slice_matrices.to(device)
+    circuit_slice_gates, circuit_slice_matrices = self.sampleCircuitBatch(batch_size=batch_size, device=device)
     allocs, log_probs = self.qubit_allocator(circuit_slice_gates, circuit_slice_matrices, greedy = use_greedy)
     allocs_BL, _ = qubit_allocator_BL(circuit_slice_gates, circuit_slice_matrices, greedy = True)
     R = cost(allocs, self.qubit_allocator.core_con)
@@ -53,19 +59,13 @@ class Reinforce:
   
 
   def _trainBatch(self, batch_size: int, qubit_allocator_BL: QubitAllocator, device: str, opt: optim.Adam):
-    loss = 0
-    all_R = []
-    all_R_bl = []
-    for b in range(batch_size):
-      R, R_BL,log_probs = self._predictBoth(qubit_allocator_BL, use_greedy=False, device=device)
-      all_R.append(R)
-      all_R_bl.append(R_BL)
-      for log_prob in log_probs:
-        loss += (R - R_BL)*log_prob
+    R, R_BL,log_probs = self._predictBoth(qubit_allocator_BL, batch_size=batch_size, use_greedy=False, device=device)
+    advantage = R - R_BL # [batch]
+    loss = (advantage * log_probs).mean()
     opt.zero_grad()
     loss.backward()
     opt.step()
-    return all_R, all_R_bl
+    return R.mean().item(), R_BL.mean().item()
   
 
   def _validation(self, num_val_runs: int, qubit_allocator_BL: QubitAllocator, device: str):
@@ -161,7 +161,7 @@ class Reinforce:
         if p_value < repl_significance:
           qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
         if verbose:
-          print(f"{fmt_res(all_R, all_R_bl, e, "val")}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
+          print(f"{fmt_res(all_R, all_R_bl, e, 'val')}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
         if checkpoint_each is not None and (e+1)%checkpoint_each == 0:
           self._genCheckpoint(subfolder=f"{e}_R_{int(sum(all_R)/len(all_R))}", device=device)
     except KeyboardInterrupt:

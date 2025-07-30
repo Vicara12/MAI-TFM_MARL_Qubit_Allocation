@@ -12,6 +12,7 @@ class CoreSnapshotEncoder(nn.Module):
   Args:
     - core_con: matrix of core connectivities of the architecture.
     - core_emb_shape: length of the output core embedding, d_H in Ref. [1].
+    - batch_size: size of the batch, used to initialize the GNN.
 
   References:
     [Attention-Based Deep Reinforcement Learning for Qubit Allocation in Modular Quantum Architectures]
@@ -29,12 +30,50 @@ class CoreSnapshotEncoder(nn.Module):
   def forward(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
     '''
     Args:
-      - prev_assign: for each logical qubit, the core to which it has been mapped. Shape: [Q]
+      - prev_assign: for each logical qubit, the core to which it has been mapped. Shape: [B, Q]
       - q_embeddings shape: [Q, d_E] where Q = number of logical qubits, d_E slice emb. dim.
     Returns:
-      - Core embeddings of shape [C, d_H] where C = number of cores, d_H = embedding size.
+      - Core embeddings of shape [B, C, d_H] where B = batch size, C = number of cores, d_H = embedding size.
+    '''
+    B, Q = prev_assign.shape
+    C = self.n_cores
+    d_E = q_embeddings.shape[-1]
+    device = q_embeddings.device
+
+    mask = (prev_assign.unsqueeze(-1) == torch.arange(C, device=device).view(1, 1, C)).float()  # [B, Q, C]
+    mask_exp = mask.unsqueeze(-1) # [B, Q, C, 1]
+    q_emb_exp = q_embeddings.unsqueeze(0).unsqueeze(2).expand(B, -1, C, -1)  # [B, Q, 1, d_E] 
+    
+    masked_q_emb = q_emb_exp * mask_exp # [B, Q, C, d_E]
+    # For safety, we place zeros with large neg value for max pooling, except where mask is 1
+    masked_q_emb = masked_q_emb + (mask_exp - 1) * 1e9  
+    core_embs, _ = masked_q_emb.max(dim=1)  # Maxpool: [B, C, d_E]
+
+    # If no qubits in core C append learnable padding emb.
+    core_has_qubit = mask.sum(dim=1) > 0  # [B, C]
+    padding_emb = self.padding_emb.to(device)
+
+    core_embs = torch.where(core_has_qubit.unsqueeze(-1), core_embs, padding_emb.expand(B, C, -1))  # [B, C, d_E]
+    return self.gnn(core_embs) # Transform core embs through GNN and remove batch dim
+  
+  def forward_v2(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
+    '''
+    Args:
+      - prev_assign: for each logical qubit, the core to which it has been mapped. Shape: [B, Q]
+      - q_embeddings shape: [B, Q, d_E] where B = batch size, Q = number of logical qubits, d_E slice emb. dim.
+    Returns:
+      - Core embeddings of shape [B, C, d_H] where B = batch size, C = number of cores, d_H = embedding size.
     '''
     core_embs = []
+
+    B, Q = prev_assign.shape
+    C = self.n_cores
+    d_E = q_embeddings.shape[-1]
+    device = q_embeddings.device
+
+    mask = (prev_assign.unsqueeze(-1) == torch.arange(C, device=device).expand(B, Q, C)) # [B, Q, C]
+    masked_q_embeddings = q_embeddings.unsqueeze(1).expand(-1, C, -1) * mask # [B, Q, C, d_E]
+
     for C in range(self.n_cores):
       mask = (prev_assign == C)
       if mask.any():
