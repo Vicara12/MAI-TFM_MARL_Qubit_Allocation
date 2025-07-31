@@ -61,22 +61,18 @@ class Reinforce:
   def _trainBatch(self, batch_size: int, qubit_allocator_BL: QubitAllocator, device: str, opt: optim.Adam):
     R, R_BL,log_probs = self._predictBoth(qubit_allocator_BL, batch_size=batch_size, use_greedy=False, device=device)
     advantage = R - R_BL # [batch]
-    loss = (advantage * log_probs).mean()
+    loss = (advantage * log_probs.sum(dim=1)).mean() # sum log probs for all actions in the trajectory (T*Q)
     opt.zero_grad()
     loss.backward()
     opt.step()
-    return R.mean().item(), R_BL.mean().item()
+    return R, R_BL
   
 
   def _validation(self, num_val_runs: int, qubit_allocator_BL: QubitAllocator, device: str):
-    all_R = []
-    all_R_bl = []
     self.qubit_allocator.eval()
-    for v in range(num_val_runs):
-      R, R_BL,_ = self._predictBoth(qubit_allocator_BL, use_greedy=True, device=device)
-      all_R.append(R)
-      all_R_bl.append(R_BL)
-    return all_R, all_R_bl
+    R, R_BL,_ = self._predictBoth(qubit_allocator_BL, batch_size=num_val_runs, use_greedy=False, device=device)
+    self.qubit_allocator.train()
+    return R, R_BL
 
 
   def _genCheckpoint(self, subfolder: Union[str, None], device: str):
@@ -91,7 +87,7 @@ class Reinforce:
     torch.save(self.qubit_allocator, os.path.join(folder, "model.pth"))
     # Generate a circuit and allocate qubits as a test
     self.qubit_allocator.eval()
-    circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sample()
+    circuit_slice_gates, circuit_slice_matrices = self.circuit_sampler.sampleBatch(batch_size=1)
     circuit_slice_matrices = circuit_slice_matrices.to(device)
     allocs, _ = self.qubit_allocator(circuit_slice_gates, circuit_slice_matrices, greedy=True)
     R = cost(allocs, self.qubit_allocator.core_con)
@@ -126,6 +122,8 @@ class Reinforce:
       - lr: learning rate.
       - num_val_runs: number of validation runs when checking for model update.
     '''
+    #torch.autograd.set_detect_anomaly(True)
+
     device = next(self.qubit_allocator.parameters()).device
     qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
     qubit_allocator_BL.eval() # We want this model to be fixed
@@ -133,7 +131,7 @@ class Reinforce:
 
     l_ep = 1+floor(log10(epochs)) # number of digits in epochs
     l_st = 1+floor(log10(steps))  # number of digits in steps
-    res_format = lambda Rs, Rbls: f"R={sum(Rs)/len(Rs):.02f} R_bl={sum(Rbls)/len(Rbls):.02f}"
+    res_format = lambda Rs, Rbls: f"R={Rs.mean():.02f} R_bl={Rbls.mean():.02f}"
     fmt_step = lambda t: f"{t+1:{l_st}d}/{steps}"
     fmt_res = lambda Rs, Rbls, e, t_str: f"[{e+1:{l_ep}d}/{epochs:},{t_str}] {res_format(Rs, Rbls)}"
 
@@ -145,25 +143,25 @@ class Reinforce:
         self.qubit_allocator.train()
         epoch_history_train = []
         for t in range(steps):
-          all_R, all_R_bl = self._trainBatch(batch_size=batch_size,
+          R, R_bl = self._trainBatch(batch_size=batch_size,
                                             qubit_allocator_BL=qubit_allocator_BL,
                                             device=device,
                                             opt=opt)
           if verbose:
-            print(fmt_res(all_R, all_R_bl, e, fmt_step(t)))
-          epoch_history_train.append(sum(all_R)/len(all_R))
-        all_R, all_R_bl = self._validation(num_val_runs=num_val_runs,
+            print(fmt_res(R, R_bl, e, fmt_step(t)))
+          epoch_history_train.append(R)
+        R, R_bl = self._validation(num_val_runs=num_val_runs,
                                           qubit_allocator_BL=qubit_allocator_BL,
                                           device=device)
         history_train.append(epoch_history_train)
-        history_val.append(sum(all_R)/len(all_R))
-        _, p_value = stats.ttest_rel(all_R, all_R_bl, alternative='less')
+        history_val.append(sum(R)/len(R))
+        _, p_value = stats.ttest_rel(R.cpu(), R_bl.cpu(), alternative='less')
         if p_value < repl_significance:
           qubit_allocator_BL = copy.deepcopy(self.qubit_allocator)
         if verbose:
-          print(f"{fmt_res(all_R, all_R_bl, e, 'val')}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
+          print(f"{fmt_res(R, R_bl, e, 'val')}, p_val={p_value:.3f} ({repl_significance} {'updating BL' if p_value < repl_significance else 'keep BL'})")
         if checkpoint_each is not None and (e+1)%checkpoint_each == 0:
-          self._genCheckpoint(subfolder=f"{e}_R_{int(sum(all_R)/len(all_R))}", device=device)
+          self._genCheckpoint(subfolder=f"{e}_R_{int(sum(R)/len(R))}", device=device)
     except KeyboardInterrupt:
       pass
 

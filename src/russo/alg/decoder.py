@@ -45,14 +45,9 @@ class Decoder(nn.Module):
     '''
     #TODO: Maybe take long out
     return Ht_C + self.capacity_emb(core_capacities.long()) + self.dist_emb(distances.long())
-  
-  def _getInvalidMask(self, core_capacities: torch.Tensor, double: bool) -> torch.Tensor:
-    ''' Return True for cores where there is not enough space for allocating the qubit.
-    '''
-    return core_capacities < torch.where(double.unsqueeze(1), 2, 1)
-  
+   
   def forward(self, Ht_C: torch.Tensor, core_capacities: torch.Tensor, distances: torch.Tensor,
-              H_X: torch.Tensor, Ht_S: torch.Tensor, Eq_Q: torch.Tensor, double: bool) -> torch.Tensor:
+              H_X: torch.Tensor, Ht_S: torch.Tensor, Eq_Q: torch.Tensor, double: bool, invalid_mask: bool) -> torch.Tensor:
     '''
     Args:
       - Ht_C: core embeddings of shape: [C, d_H]
@@ -77,8 +72,8 @@ class Decoder(nn.Module):
     attn_logits = attn_logits.squeeze(-1) / sqrt_dH # [B, C] 
     attn_weights = F.softmax(attn_logits, dim=0) # [B, C]
     glimpse = torch.matmul(attn_weights.unsqueeze(1), V).squeeze(1) # [B, 1, C]x[B, C, d_H] -> [B, d_H]
-    # Compute scores and mask invalid qubits
-    invalid_mask = self._getInvalidMask(core_capacities, double)
-    u_tqc = torch.matmul(K, glimpse.unsqueeze(-1)).unsqueeze(-1) /sqrt_dH # [B, C, d_H]x[B, d_H, 1] -> [B, C]
+    # Compute scores and mask invalid cores
+    
+    u_tqc = torch.matmul(K, glimpse.unsqueeze(-1)).squeeze(-1) /sqrt_dH # [B, C, d_H]x[B, d_H, 1] -> [B, C]
     u_tqc = u_tqc.masked_fill(invalid_mask, float('-inf')) # [B, C]
-    return F.softmax(u_tqc, dim=0) # [C]
+    return F.softmax(u_tqc, dim=-1) # [B, C]

@@ -41,7 +41,7 @@ class RandomCircuit(CircuitSampler):
       - Each slice contains non-overlapping 2-qubit gates, and the adjacency matrix is symmetric.
     """
     #TODO: this is not efficient, we should speed it up with Cython or similar
-    #TODO: adjency matrix can take a lot of memory, we should consider using sparse matrices
+    #TODO: adjency matrix can take a lot of memory, we should consider using sparse matrices (implies many changes)
 
     if callable(self.num_slices):
       num_slices_list = [self.num_slices() for _ in range(batch_size)]
