@@ -32,11 +32,11 @@ class MCTS:
     @property
     def expanded(self) -> bool:
       return self.children is not None
-    
+
     @property
     def value(self) -> float:
       return self.value_sum/self.visit_count if self.visit_count != 0 else 0
-  
+
 
   @dataclass
   class Config:
@@ -53,7 +53,7 @@ class MCTS:
     self.ucb_c1 = 1.25  # As in Ref. [1]
     self.ucb_c2 = 19652 # As in Ref. [1]
     self.root = self.__buildRoot(init_repr=init_repr, core_capacities=core_capacities)
-  
+
 
   def run(self, num_sims: int):
     for _ in range(num_sims):
@@ -68,7 +68,7 @@ class MCTS:
       node_value = self.__expandNode(node=node, father_node=father, action=last_action)
       self.__backprop(node_value)
     return self.__selectAction(self.root)
-  
+
 
   @staticmethod
   def __selectAction(node: Node) -> int:
@@ -88,7 +88,7 @@ class MCTS:
     pol = (1 - self.config.noise)*pol + self.config.noise*dir_noise
     pol[core_caps == 0] = 0 # Set prior of exploring a core without capacity to zero
     return pol, v
-  
+
 
   def __getNewStateAndReward(self, state: torch.Tensor, action: int) -> Tuple[torch.Tensor, float]:
     new_state, r = InferenceServer.DYN_MODEL(state, action)

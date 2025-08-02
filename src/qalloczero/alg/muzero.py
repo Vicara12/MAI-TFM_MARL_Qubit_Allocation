@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from sampler.circuitsampler import CircuitSampler
+from qalloczero.alg.mcts import MCTS
 
 
 class MuZero:
@@ -24,6 +25,7 @@ class MuZero:
   def train(self, train_cfg: MuZeroTrainParams) -> None:
     for train_i in range(train_cfg.train_iters):
       print(f" [*] train_{train_i}")
+      mcts_cfg = MCTS.Config()
       for act_i in range(train_cfg.num_actors):
         self.optimizeCircuit(train_cfg)
       updateModels()
