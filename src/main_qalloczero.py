@@ -1,19 +1,22 @@
 from utils.timer import Timer
-from random import random
+from qalloczero.alg.replaybuff import ReplayBuffer
+import torch
 
-t = Timer("t1")
 
-@t.timer_decorator
-def sum_rand(times):
-  total = 0
-  for _ in range(times):
-    total += random()
-  return total
+def add(n_elms, rb):
+  states  = torch.rand((n_elms,3))
+  actions = torch.rand((n_elms,1))
+  rewards = torch.rand((n_elms,1))
+  print(f"{states =}\n{actions =}\n{rewards}")
+  rb.push(states=states, actions=actions, rewards=rewards)
+
 
 def main():
-  s=sum_rand(1000)
-  t = Timer.get("t1")
-  print(f"t = {t.time}, f={t.freq}, s={s}")
+  r = ReplayBuffer(10, 3)
+  
+  r.setSamplingMode()
+  stats, acts, rwds = r.sample(2, "cpu")
+  print(f"\n{stats =}\n{acts =}\n{rwds =}")
 
 
 if __name__ == "__main__":
