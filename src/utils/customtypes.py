@@ -11,19 +11,11 @@ CircSliceType: TypeAlias = Tuple[GateType, ...]
 @dataclass
 class Circuit:
   slice_gates: Tuple[CircSliceType, ...]
-  slice_matrices: torch.Tensor
+  n_qubits: int
   # alloc_steps: refer to the function __getAllocOrder for info on this attribute
 
 
   def __post_init__(self):
-    ''' Ensures the correctness of slice_gates and slice_matrices.
-    '''
-    assert len(self.slice_gates) == len(self.slice_matrices), \
-      (f"Len of slice gates and slice matrices should coincide "
-       f"{len(self.slice_gates)} != {len(self.slice_matrices)}")
-    assert len(self.slice_matrices.shape) == 3 and  \
-           self.slice_matrices.shape[1] == self.slice_matrices.shape[2], \
-      f"Slice matrices should be a vector of square matrices, but found shape {self.slice_matrices.shape}"
     self.alloc_steps = self.__getAllocOrder()
 
 
@@ -43,11 +35,6 @@ class Circuit:
       for q in free_qubits:
         allocations.append((slice_i, (q,)))
     return tuple(allocations)
-
-
-  @property
-  def n_qubits(self) -> int:
-    return self.slice_matrices.shape[1]
   
   @property
   def n_slices(self) -> int:
@@ -75,3 +62,7 @@ class Hardware:
   @property
   def n_cores(self):
     return len(self.core_capacities)
+  
+  @property
+  def n_physical_qubits(self):
+    return sum(self.core_capacities)

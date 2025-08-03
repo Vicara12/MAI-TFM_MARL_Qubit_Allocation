@@ -50,6 +50,10 @@ class Timer:
     return self.total_t/self.calls
   
   @property
+  def total_time(self) -> float:
+    return self.total_t
+  
+  @property
   def freq(self) -> float:
     ''' Returns the frequency (1/time) of the calls.
     '''
@@ -100,3 +104,9 @@ class Timer:
     if name not in Timer.INSTANCES.keys():
       return Timer(name)
     return Timer.INSTANCES[name]
+  
+  def __enter__(self):
+    self.start()
+  
+  def __exit__(self, exc_type, exc_value, traceback):
+    self.stop()

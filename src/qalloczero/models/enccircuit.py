@@ -1,25 +1,30 @@
-
+from typing import Tuple, List
 import torch
+from torch_geometric.nn import GCNConv
+from torch_geometric.data import Data, Batch
+from utils.customtypes import Hardware
 
-class EncodedCircuit:
-  ''' Holds the slice encodings and returns state encodings for each time slice.
 
-  The state is encoded through a mean of the circuit slices from the current slice until the end.
-  This class holds the original circuit and the state at each time slice.
-
-  NOTE: It is possible to either a) run the model that encodes slice embeddings in train
-  mode, so that we only need to execute it once (less time) but need to hold the computational graph
-  for all of them until the end (more memory); or b) run the model in test mode, so that we don't
-  need to hold the computational graph of each embedding (less memory) but at training need to
-  re-compute the circuit embeddings in training mode (more time). We can decide on which is better
-  later on depending on what is more critical, VRAM or time.
+class CircuitEncoder(torch.nn.Module):
+  ''' Handles the codification of circuits as slices of circuit embeddings.
   '''
 
-  def __init__(self, circuit_matrices: torch.Tensor, circuit_slice_embeddings: torch.Tensor):
-    self.circuit_matrices = circuit_matrices
-    self.circuit_embeddings = torch.empty_like(circuit_slice_embeddings)
-    for t_i in range(len(circuit_slice_embeddings)):
-      self.circuit_embeddings = torch.mean(circuit_slice_embeddings[t_i:,:], axis=0)
-  
-  def circuitEmbAtSlice(self, slice: int) -> torch.Tensor:
-    return self.circuit_embeddings[slice]
+  def __init__(self, hardware: Hardware, nn_dims: Tuple[int]):
+    assert len(nn_dims) > 2, "At least input and output dimensions must be specified"
+    assert all(d > 0 for d in nn_dims), "All nn_dims must be strictly positive"
+    super().__init__()
+    self.qubit_embeddings = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits+1, nn_dims[0]),
+                                               requires_grad=True)
+    self.convs = torch.nn.ModuleList()
+    for in_dim, out_dim in zip(nn_dims[:-1], nn_dims[1:]):
+      self.convs.append(GCNConv(in_dim, out_dim))
+
+
+  def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
+    batch = Batch.from_data_list(
+      [Data(x=self.qubit_embeddings, edge_index=mat) for mat in slice_matrices])
+    x = batch.x
+    for conv in self.convs:
+      x = conv(x, batch.edge_index)
+      x = torch.relu(x)
+    return x

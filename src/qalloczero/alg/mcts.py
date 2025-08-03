@@ -64,7 +64,7 @@ class MCTS:
     self.root = self.__buildRoot()
 
 
-  def run(self, target_tree_size: int):
+  def run(self, target_tree_size: int) -> int:
     # Visit count is equal to the current size of the tree
     num_sims = target_tree_size - self.root.visit_count
     for _ in range(num_sims):
@@ -159,7 +159,7 @@ class MCTS:
       node_value = node.reward + self.cfg.discount_factor*node_value
   
   
-  def __UCB(self, node: Node, action: int) -> int:
+  def __UCB(self, node: Node, action: int) -> float:
     ''' Upper Confidence Bound.
 
     For a nicely formatted version of this formula refer to Appendix B in Ref. [1]
