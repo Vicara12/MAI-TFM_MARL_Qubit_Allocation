@@ -1,18 +1,21 @@
 from abc import abstractmethod, ABC
-from typing import Tuple
+from typing import Tuple, Union
 import torch
+from utils.customtypes import CircSliceType, GateType
 
 
 class CircuitSampler(ABC):
   def __init__(self, num_lq):
     self.num_lq_ = num_lq
   
+
   @property
   def num_lq(self):
     return self.num_lq_
   
+
   @abstractmethod
-  def sample(self) -> Tuple[ Tuple[Tuple[Tuple[int,int], ...], ...], torch.Tensor ]:
+  def sample(self) -> Tuple[ Tuple[CircSliceType, ...], torch.Tensor ]:
     ''' Function that takes no arguments and returns a problem sample.
 
     A problem instance is composed of a circuit_slice_gates tuple and a circuit_slice_matrices tuple.
@@ -29,6 +32,7 @@ class CircuitSampler(ABC):
     '''
     raise NotImplementedError("implement sampler for class")
   
+
   @abstractmethod
   def __str__(self) -> str:
     raise NotImplementedError("implement __str__ method for class")

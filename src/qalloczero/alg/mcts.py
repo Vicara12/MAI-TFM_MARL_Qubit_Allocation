@@ -1,8 +1,9 @@
 from typing import List, Self, Tuple, Dict, Union
-from math import sqrt, ln
+from math import sqrt, log
 from copy import copy
 from dataclasses import dataclass
 import torch
+from utils.customtypes import Hardware, Circuit
 from qalloczero.models.inferenceserver import InferenceServer
 
 
@@ -14,16 +15,23 @@ class MCTS:
     - init_repr: initial representation of the state (s_0 in Ref. [1]).
 
   References:
-    [Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model]
-    (https://arxiv.org/abs/1911.08265)
-      Julian Schrittwieser et. al. 2020.
+    [Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm]
+    (https://arxiv.org/abs/1712.01815)
+      David Silver et. al. 2017.
   '''
 
   @dataclass
   class Node:
+    # Circuit sate attributes
+    current_allocs: Dict[int, int]
+    prev_allocs: Dict[int, int] # Allocations in the previous time slice
     core_caps: List[int]
-    state: torch.Tensor
-    policy: List[float]
+    # State attributes
+    allocation_step: int
+    terminal: bool = False
+    current_slice: int
+    # RL attributes
+    policy: torch.Tensor
     value_sum: float = 0
     visit_count: int = 0
     reward:      int = 0
@@ -43,31 +51,38 @@ class MCTS:
     noise: float = 0.25
     dirichlet_alpha: float = 0.3
     discount_factor: float = 1.0
+    ucb_c1: float = 1.25  # As in Ref. [1]
+    ucb_c2: float = 19652 # As in Ref. [1]
 
 
-  def __init__(self, init_repr: torch.Tensor, core_capacities: torch.Tensor, config: Config):
-    self.core_capacities = core_capacities
-    self.init_repr = init_repr
-    self.n_cores = len(core_capacities)
-    self.config = copy(config)
-    self.ucb_c1 = 1.25  # As in Ref. [1]
-    self.ucb_c2 = 19652 # As in Ref. [1]
-    self.root = self.__buildRoot(init_repr=init_repr, core_capacities=core_capacities)
+
+  def __init__(self, circuit_embs: torch.Tensor, circuit: Circuit, hardware: Hardware, config: Config):
+    self.circuit_embs = circuit_embs
+    self.circuit = circuit
+    self.hardware = hardware
+    self.cfg = config
+    self.root = self.__buildRoot()
 
 
-  def run(self, num_sims: int):
+  def run(self, target_tree_size: int):
+    # Visit count is equal to the current size of the tree
+    num_sims = target_tree_size - self.root.visit_count
     for _ in range(num_sims):
       node = self.root
       search_path = [node]
       last_action = None
-      while node.expanded:
+      while node.expanded and not node.terminal:
         last_action, node = self.__selectChild(current_node=node)
         search_path.append(node)
         node = node.children[last_action]
-      father = search_path[-2]
-      node_value = self.__expandNode(node=node, father_node=father, action=last_action)
+      if not node.terminal:
+        node_value = self.__expandNode(node=node, parent_node=search_path[-2], action=last_action)
+      else:
+        node_value = node.value
       self.__backprop(node_value)
-    return self.__selectAction(self.root)
+    action = self.__selectAction(self.root)
+    self.root = self.root.children[action]
+    return action
 
 
   @staticmethod
@@ -79,41 +94,60 @@ class MCTS:
     return torch.multinomial(visit_counts, num_samples=1).item()
 
 
-  def __getNewPolicyAndValue(self,
-                             state: torch.Tensor,
-                             core_caps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-    pol, v = InferenceServer.PRED_MODEL(state, core_caps)
+  def __getNewPolicyAndValue(self, node: Node) -> Tuple[torch.Tensor, torch.Tensor]:
+    state = self.circuit_embs[node.current_slice]
+    pol, v = InferenceServer.inference(state, node.core_caps)
     # Add exploration noise to the priors
-    dir_noise = torch.distributions.Dirichlet(self.config.dirichlet_alpha * torch.ones_like(pol)).sample()
-    pol = (1 - self.config.noise)*pol + self.config.noise*dir_noise
-    pol[core_caps == 0] = 0 # Set prior of exploring a core without capacity to zero
+    dir_noise = torch.distributions.Dirichlet(self.cfg.dirichlet_alpha * torch.ones_like(pol)).sample()
+    pol = (1 - self.cfg.noise)*pol + self.cfg.noise*dir_noise
+    # Set prior of cores that do not have space for this alloc to zero
+    n_qubits = len(self.circuit.alloc_steps[node.allocation_step][1])
+    pol[node.core_caps < n_qubits] = 0
     return pol, v
 
 
-  def __getNewStateAndReward(self, state: torch.Tensor, action: int) -> Tuple[torch.Tensor, float]:
-    new_state, r = InferenceServer.DYN_MODEL(state, action)
-    return new_state, r
-
-
-  def __buildRoot(self, init_repr: torch.Tensor, core_caps: torch.Tensor) -> Node:
-    pol, v = self.__getNewPolicyAndValue(state=init_repr, core_caps=core_caps)
+  def __buildRoot(self) -> Node:
+    pol, v = self.__getNewPolicyAndValue(state=self.circuit_embs[0],
+                                         core_caps=self.hardware.core_capacities)
     return MCTS.Node(
-      core_caps=core_caps.copy_(),
-      state=init_repr,
+      current_allocs={},
+      prev_allocs={},
+      core_caps=self.hardware.core_capacities,
+      allocation_step=0,
+      allocation_step=0,
       policy=pol,
-      children={c: MCTS.Node() for c in range(self.n_cores) if core_caps[c] != 0}
+      children={c: MCTS.Node() for c in range(self.hardware.n_cores)}
     )
 
 
   def __expandNode(self,
                    node: Node,
-                   father_node: Union[Node, None],
+                   parent_node: Union[Node, None],
                    action: Union[int, None]) -> float:
-    node.core_caps = father_node.core_caps.copy_()
-    node.core_caps[action] -= 1
-    assert node.core_caps[action] >= 0
-    node.state, node.reward = self.__getNewStateAndReward(state=father_node.state, action=action)
-    node.policy, value  = self.__getNewPolicyAndValue(node.state, node.core_caps)
+    (slice_parent, alloc_qubits) = self.circuit.alloc_steps[parent_node.allocation_step]
+    node.current_allocs = copy(parent_node.current_allocs)
+    node.allocation_step = parent_node.allocation_step+1
+    for qubit in alloc_qubits:
+      node.current_allocs[qubit] = action # action means qubit is allocated to a core, so action = core
+    if slice_parent != 0:
+      for qubit in alloc_qubits:
+        node.reward += self.hardware.core_connectivity[action, parent_node.prev_allocs[qubit]]
+    # Node has reached end of allocation process
+    if node.allocation_step == len(self.circuit.alloc_steps):
+      node.terminal = True
+    else:
+      node.current_slice = self.circuit.alloc_steps[node.allocation_step][0]
+      # Node corresponds to a time slice different than its parent's, set prev allocs to current allocs
+      if parent_node.current_slice != node.current_slice:
+        node.prev_allocs = node.current_allocs
+        node.current_allocs = {}
+        node.core_caps = self.hardware.core_capacities
+      else:
+        node.prev_allocs = parent_node.prev_allocs
+        node.core_caps = copy(parent_node.core_caps)
+        node.core_caps[action] -= len(alloc_qubits)
+        assert node.core_caps[action] >= 0
+    node.policy, value  = self.__getNewPolicyAndValue(node)
     node.children={c: MCTS.Node() for c in range(self.n_cores) if node.core_caps[c] != 0}
     return value
 
@@ -122,7 +156,7 @@ class MCTS:
     for node in search_path:
       node.value_sum += node_value
       node.visit_count += 1
-      node_value = node.reward + self.config.discount_factor*node_value
+      node_value = node.reward + self.cfg.discount_factor*node_value
   
   
   def __UCB(self, node: Node, action: int) -> int:
@@ -132,7 +166,7 @@ class MCTS:
     '''
     return node[action].value + \
            node.policy[action]*sqrt(node.visit_count)/(1+node[action].visit_count) * \
-              (self.ucb_c1 + ln((node.visit_count + self.ucb_c2 + 1)/self.ucb_c2))
+              (self.cfg.ucb_c1 + log((node.visit_count + self.cfg.ucb_c2 + 1)/self.cfg.ucb_c2))
 
   
   def __selectChild(self, current_node: Node) -> Tuple[int, Node]:

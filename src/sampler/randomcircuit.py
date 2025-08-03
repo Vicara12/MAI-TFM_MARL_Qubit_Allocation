@@ -2,6 +2,7 @@ import random
 import torch
 from typing import Tuple, Union, Callable
 from sampler.circuitsampler import CircuitSampler
+from utils.customtypes import CircSliceType
 
 
 class RandomCircuit(CircuitSampler):
@@ -18,7 +19,7 @@ class RandomCircuit(CircuitSampler):
     self.num_slices = num_slices
   
 
-  def sample(self) -> Tuple[ Tuple[Tuple[Tuple[int,int], ...], ...], torch.Tensor ]:
+  def sample(self) -> Tuple[ Tuple[CircSliceType, ...], torch.Tensor ]:
     int_num_slices = self.num_slices() if self.num_slices is Callable else self.num_slices
     circuit_slice_matrices = torch.zeros(size=(int_num_slices, self.num_lq_, self.num_lq_))
     circuit_slice_gates = []

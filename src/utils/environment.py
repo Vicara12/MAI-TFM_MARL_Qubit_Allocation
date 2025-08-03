@@ -1,6 +1,6 @@
 from typing import Tuple
 import torch
-from utils.circuittypes import Circuit, Hardware
+from utils.customtypes import Circuit, Hardware
 
 
 class QubitAllocationEnvironment:
@@ -19,7 +19,7 @@ class QubitAllocationEnvironment:
   
   
   def allocate(self, core: int, qubit: int) -> int:
-    ''' Assign a core to a qubit in the current time slice.
+    ''' Assign a core to a qubit in the current time slice and returns the cost of the allocation.
 
     This is the only action in the environment. Contains several asserts to ensure the validity of
     the solution.
@@ -48,6 +48,12 @@ class QubitAllocationEnvironment:
         self.qubit_is_allocated = torch.tensor([False]*self.circuit.n_qubits, dtype=bool)
         self.qubits_to_allocate = self.circuit.n_qubits
         self.current_slice += 1
+
+    # Return cost of the allocation
+    if self.current_slice == 0:
+      return 0
+    prev_core = self.allocations[qubit, self.current_slice-1]
+    return self.hardware.core_connectivity[prev_core,core]
         
 
   @property
