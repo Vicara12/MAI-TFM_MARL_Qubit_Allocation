@@ -2,11 +2,13 @@ from typing import Tuple, List
 import torch
 from torch_geometric.nn import GCNConv
 from torch_geometric.data import Data, Batch
-from utils.customtypes import Hardware
+from utils.customtypes import Hardware, Circuit
+from utils.circuitutils import getCircuitMatrices2xE
 
 
-class CircuitEncoder(torch.nn.Module):
-  ''' Handles the codification of circuits as slices of circuit embeddings.
+
+class GNNEncoder(torch.nn.Module):
+  ''' Handles the codification of circuit slices via GNN.
   '''
 
   def __init__(self, hardware: Hardware, nn_dims: Tuple[int]):
@@ -28,3 +30,23 @@ class CircuitEncoder(torch.nn.Module):
       x = conv(x, batch.edge_index)
       x = torch.relu(x)
     return x
+
+
+  def encodeCircuits(self, circuits: List[Circuit]):
+    slices_per_circuit = [c.n_slices for c in circuits]
+    indices = [sum(slices_per_circuit[:i]) for i in range(len(circuits))]
+    # Each circuit is composed as a list of matrices, join all lists into a single mega-list
+    matrices = [m for c in circuits for m in getCircuitMatrices2xE(c)]
+    result = self.forward(matrices)
+    # Split the resulting tensor into a list with one tensor per circuit
+    slice_embs = [result[i_ini:i_fi,:] for i_ini, i_fi in zip(indices[:-1], indices[1:])]
+    circuit_embs = []
+    # Each item in slice embs is a tensor. The ith row of this tensor corresponds to the embedding
+    # of the ith time slice. We want a tensor in which the ith row contains a circuit embedding from
+    # the ith time slice until the end (through pooling)
+    for circuit in slice_embs:
+      circuit_emb = torch.empty_like(circuit)
+      for i in range(circuit.shape[0]):
+        circuit_emb[i,:] = torch.max(circuit[i:,:], dim=0).values
+      circuit_embs.append(circuit_emb)
+    return slice_embs
