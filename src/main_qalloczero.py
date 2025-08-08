@@ -1,31 +1,30 @@
 import torch
 from utils.timer import Timer
 from sampler.randomcircuit import RandomCircuit
-from qalloczero.models.enccircuit import GNNEncoder
-from utils.circuitutils import getCircuitMatrices2xE
+from qalloczero.alg.alphazero import AlphaZero
+from qalloczero.models.predmodel import PredictionModel
+from qalloczero.models.inferenceserver import InferenceServer
 from utils.customtypes import Hardware
+from utils.plotter import drawQubitAllocation
+
 
 
 def main():
-  sampler = RandomCircuit(num_lq=5, num_slices=2)
-  circuits = [sampler.sample() for _ in range(2)]
-  matrices = [getCircuitMatrices2xE(c) for c in circuits]
-  hardware = Hardware(core_capacities=(5,5), core_connectivity=torch.Tensor([[0,1],[1,0]]))
-  circuit_encoder = GNNEncoder(hardware=hardware, nn_dims=[8,4,4])
-  t1 = Timer('t1')
-  t2 = Timer('t2')
-  # TODO: test
-  with t1:
-    embs = circuit_encoder.encodeCircuits(circuits)
-  # embs_ = []
-  # for matrix in matrices:
-  #   with t2:
-  #     e = circuit_encoder([matrix])
-  #   embs_.append(e)
-  # embs_ = torch.concat(embs_, axis= 0)
-  # print(f"t_bat={t1.total_time}\nt_sep={t2.total_time}")
-  print(embs)
+  core_caps = torch.tensor([4,4,4,4], dtype=int)
+  core_con = torch.ones(size=(len(core_caps),len(core_caps)), dtype=int) - torch.eye(n=len(core_caps), dtype=int)
+  hardware = Hardware(core_capacities=core_caps, core_connectivity=core_con)
+  InferenceServer.setModel(PredictionModel(hardware=hardware))
+
+  circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=30).sample()
+
+  azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(2,8,8), mcts_tree_size=256)
+  azero = AlphaZero(config=azero_config)
+  allocations, history = azero.optimizeCircuit(circuit=circuit)
+  print("\nHistory:")
+  for piece in history:
+     print(piece)
+  drawQubitAllocation(allocations, core_caps, circuit.slice_gates)
 
 
 if __name__ == "__main__":
-  main()
+    main()

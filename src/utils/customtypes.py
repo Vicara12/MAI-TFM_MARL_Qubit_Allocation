@@ -44,14 +44,16 @@ class Circuit:
 
 @dataclass
 class Hardware:
-  core_capacities: Tuple[int, ...]
+  core_capacities: torch.Tensor
   core_connectivity: torch.Tensor
 
 
   def __post_init__(self):
     ''' Ensures the correctness of the data.
     '''
-    assert all(c > 0 for c in self.core_capacities), f"All core capacities should be greater than 0"
+    assert len(self.core_capacities.shape) == 1, "Core capacities must be a vector"
+    assert not torch.is_floating_point(self.core_capacities), "Core capacities must be of dtype int"
+    assert all(self.core_capacities > 0), f"All core capacities should be greater than 0"
     assert len(self.core_connectivity.shape) == 2 and \
            self.core_connectivity.shape[0] == self.core_connectivity.shape[1], \
       f"Core connectivity should be a square matrix, found matrix of shape {self.core_capacities.shape}"
@@ -65,4 +67,4 @@ class Hardware:
   
   @property
   def n_physical_qubits(self):
-    return sum(self.core_capacities)
+    return sum(self.core_capacities).item()

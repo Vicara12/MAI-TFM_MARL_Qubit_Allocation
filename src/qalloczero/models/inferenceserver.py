@@ -10,7 +10,7 @@ class InferenceServer:
 
 
   @staticmethod
-  def addModel(model: Module):
+  def setModel(model: Module):
     InferenceServer.MODEL = model
 
   @staticmethod
