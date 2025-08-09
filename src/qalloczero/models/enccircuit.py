@@ -36,6 +36,7 @@ class GNNEncoder(torch.nn.Module):
 
 
   def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
+    # TODO: check zeros
     batch = Batch.from_data_list(
       [Data(x=self.qubit_embeddings, edge_index=mat) for mat in slice_matrices])
     x = batch.x

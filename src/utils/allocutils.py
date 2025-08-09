@@ -3,7 +3,7 @@ from copy import copy
 from typing import Tuple
 
 
-def cost(allocations: torch.Tensor, core_con: torch.Tensor) -> int:
+def solutionCost(allocations: torch.Tensor, core_con: torch.Tensor) -> int:
   ''' Compute the cost of the allocation with the given core connectivity matrix.
 
   The cost is computed as the number of swaps and the cost per swap.

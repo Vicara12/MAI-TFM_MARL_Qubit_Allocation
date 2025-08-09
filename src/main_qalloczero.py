@@ -1,5 +1,6 @@
 import torch
 from utils.timer import Timer
+from utils.allocutils import solutionCost, validate
 from sampler.randomcircuit import RandomCircuit
 from qalloczero.alg.alphazero import AlphaZero
 from qalloczero.models.predmodel import PredictionModel
@@ -23,6 +24,10 @@ def main():
   print("\nHistory:")
   for piece in history:
      print(piece)
+
+  cost = solutionCost(allocations,hardware.core_connectivity)
+  valid = validate(allocations,hardware.core_connectivity, hardware.core_capacities)
+  print(f" -> valid={valid}, cost={cost}")
   drawQubitAllocation(allocations, core_caps, circuit.slice_gates)
 
 
