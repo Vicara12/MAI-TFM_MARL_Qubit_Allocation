@@ -24,9 +24,11 @@ class AlphaZero:
     mcts_tree_size: int
 
 
-  def __init__(self, config: Config):
+  def __init__(self, config: Config, qubit_embs: torch.Tensor):
     self.cfg = config
-    self.circuit_encoder = GNNEncoder(hardware=self.cfg.hardware, nn_dims=self.cfg.encoder_shape)
+    self.circuit_encoder = GNNEncoder(hardware=self.cfg.hardware,
+                                      nn_dims=self.cfg.encoder_shape,
+                                      qubit_embs=qubit_embs)
 
 
   def optimizeCircuit(self, circuit: Circuit) -> Tuple[torch.Tensor, List]:

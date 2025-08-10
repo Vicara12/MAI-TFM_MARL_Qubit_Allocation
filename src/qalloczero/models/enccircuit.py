@@ -22,17 +22,22 @@ class GNNEncoder(torch.nn.Module):
     return pe  # [T, d_model]
   
 
-  def __init__(self, hardware: Hardware, nn_dims: Tuple[int]):
+  def __init__(self, hardware: Hardware, nn_dims: Tuple[int], qubit_embs: torch.Tensor):
     assert len(nn_dims) > 2, "At least input and output dimensions must be specified"
     assert all(d > 0 for d in nn_dims), "All nn_dims must be strictly positive"
+    assert len(qubit_embs.shape) == 2, "Qubit embeddings must be a vector of embeddings (rank 2)"
+    assert qubit_embs.shape[0] == hardware.n_physical_qubits, \
+      f"Num of embeddings ({qubit_embs.shape[0]}) does not match num of physical qubits {hardware.n_physical_qubits}"
+    assert qubit_embs.shape[1] == nn_dims[0], \
+      f"Embedding size ({qubit_embs.shape[1]}) does not match nn_dims.shape[0] ({nn_dims.shape[0]})"
     super().__init__()
     self.hw = hardware
     self.nn_dims = nn_dims
-    self.qubit_embeddings = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits, nn_dims[0]),
-                                               requires_grad=True)
+    self.qubit_embeddings = qubit_embs
     self.convs = torch.nn.ModuleList()
     for in_dim, out_dim in zip(nn_dims[:-1], nn_dims[1:]):
       self.convs.append(GCNConv(in_dim, out_dim))
+      # TODO: relu?
 
 
   def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
@@ -46,7 +51,7 @@ class GNNEncoder(torch.nn.Module):
     return x
 
 
-  def encodeCircuits(self, circuits: List[Circuit]):
+  def encodeCircuits(self, circuits: List[Circuit]) -> Tuple[torch.Tensor, torch.Tensor]:
     slices_per_circuit = [c.n_slices for c in circuits]
     indices = [sum(slices_per_circuit[:i]) for i in range(len(circuits)+1)]
     # Each circuit is composed as a list of matrices, join all lists into a single mega-list
@@ -73,4 +78,4 @@ class GNNEncoder(torch.nn.Module):
       for i in range(circuit.shape[0]):
         circuit_emb[i,:] = torch.max(circuit[i:,:], dim=0).values
       circuit_embs.append(circuit_emb)
-    return circuit_embs
+    return circuit_embs, slice_embs

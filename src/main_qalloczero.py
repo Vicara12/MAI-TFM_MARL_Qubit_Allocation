@@ -14,12 +14,17 @@ def main():
   core_caps = torch.tensor([4,4,4,4], dtype=int)
   core_con = torch.ones(size=(len(core_caps),len(core_caps)), dtype=int) - torch.eye(n=len(core_caps), dtype=int)
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_con)
-  InferenceServer.setModel(PredictionModel(hardware=hardware))
+  q_embs = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits, 2), requires_grad=True)
+  pred_mod = PredictionModel(
+     config=PredictionModel.Config(hw=hardware, mha_num_heads=4),
+     qubit_embs=q_embs
+  )
+  InferenceServer.setModel(pred_mod)
 
   circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=30).sample()
 
   azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(2,8,8), mcts_tree_size=256)
-  azero = AlphaZero(config=azero_config)
+  azero = AlphaZero(config=azero_config, qubit_embs=q_embs)
   allocations, history = azero.optimizeCircuit(circuit=circuit)
   print("\nHistory:")
   for piece in history:
