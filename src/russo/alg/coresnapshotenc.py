@@ -56,29 +56,3 @@ class CoreSnapshotEncoder(nn.Module):
     core_embs = torch.where(core_has_qubit.unsqueeze(-1), core_embs, padding_emb.expand(B, C, -1))  # [B, C, d_E]
     return self.gnn(core_embs) # Transform core embs through GNN and remove batch dim
   
-  def forward_v2(self, prev_assign: torch.Tensor, q_embeddings: torch.Tensor) -> torch.Tensor:
-    '''
-    Args:
-      - prev_assign: for each logical qubit, the core to which it has been mapped. Shape: [B, Q]
-      - q_embeddings shape: [B, Q, d_E] where B = batch size, Q = number of logical qubits, d_E slice emb. dim.
-    Returns:
-      - Core embeddings of shape [B, C, d_H] where B = batch size, C = number of cores, d_H = embedding size.
-    '''
-    core_embs = []
-
-    B, Q = prev_assign.shape
-    C = self.n_cores
-    d_E = q_embeddings.shape[-1]
-    device = q_embeddings.device
-
-    mask = (prev_assign.unsqueeze(-1) == torch.arange(C, device=device).expand(B, Q, C)) # [B, Q, C]
-    masked_q_embeddings = q_embeddings.unsqueeze(1).expand(-1, C, -1) * mask # [B, Q, C, d_E]
-
-    for C in range(self.n_cores):
-      mask = (prev_assign == C)
-      if mask.any():
-        core_embs.append(q_embeddings[mask].max(dim=0)[0]) # Take max pool of all q embs. in core C
-      else:
-        core_embs.append(self.padding_emb) # If no qubits in core C append learnable padding emb.
-    core_embs = torch.stack(core_embs).to(q_embeddings.device)
-    return self.gnn(core_embs).squeeze() # Transform core embs through GNN and remove "batch" dim
