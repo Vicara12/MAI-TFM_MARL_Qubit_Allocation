@@ -19,15 +19,17 @@ class SnapEncModel(torch.nn.Module):
     self.convs = torch.nn.ModuleList()
     for in_dim, out_dim in zip(nn_dims[:-1], nn_dims[1:]):
       self.convs.append(GCNConv(in_dim, out_dim))
-  
 
-  def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
+
+  def gnn(self, core_embs: List[torch.Tensor]) -> torch.Tensor:
     # TODO: check zeros
     batch = Batch.from_data_list(
-      [Data(x=self.qubit_embeddings, edge_index=mat) for mat in slice_matrices])
+      [Data(x=ce,
+            edge_index=self.hw.sparse_core_con,
+            edge_weight=self.hw.sparse_core_ws) for ce in core_embs])
     x = batch.x
     for conv in self.convs:
-      x = conv(x, batch.edge_index)
+      x = conv(x, batch.edge_index, batch.edge_weight)
       x = torch.relu(x)
     return x
 
@@ -40,18 +42,19 @@ class SnapEncModel(torch.nn.Module):
       qubits_in_core = (prev_core_allocs == core_i).nonzero().flatten()
       core_qubits_tensor = torch.empty(size=(core_cap, self.qemb_len))
       n_alloc = len(qubits_in_core)
-      core_qubits_tensor[:n_alloc, :] = self.qubit_embs[qubits_in_core]
+      if n_alloc != 0:
+        core_qubits_tensor[:n_alloc, :] = self.qubit_embs[qubits_in_core]
       # Fill remainder of qubit emb with repetitions of the dummy qubit
-      core_qubits_tensor[n_alloc, :] = self.dummy_qubit_emb.expand(core_cap-n_alloc,-1,-1)
+      core_qubits_tensor[n_alloc:, :] = self.dummy_qubit_emb.expand(core_cap-n_alloc,-1)
       core_embs[core_i,:] = torch.max(core_qubits_tensor, dim=0).values
     return core_embs
+
   
-  
-  def getCoreEmbs(self, prev_core_allocs: List[torch.Tensor]) -> List[torch.Tensor]:
+  def forward(self, core_allocs: List[torch.Tensor]) -> List[torch.Tensor]:
     pregnn_embs = []
-    for prev_alloc in prev_core_allocs:
+    for prev_alloc in core_allocs:
       pregnn_embs.append(self.unmixedCoreEmbs(prev_alloc))
-    result = self.forward(pregnn_embs)
+    result = self.gnn(pregnn_embs)
     core_embs = []
     n_rows = result.shape[0]
     nc = self.hw.n_cores

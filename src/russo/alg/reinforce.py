@@ -12,7 +12,7 @@ from utils.plotter import drawCircuit, drawQubitAllocation
 from sampler.circuitsampler import CircuitSampler
 
 
-import torch # TODO REMOVE
+import torch
 
 class Reinforce:
   ''' REINFORCE with Rollout Baseline to train circuit slicer.

@@ -1,5 +1,6 @@
 from typing import TypeAlias, Tuple, Union
 import torch
+from torch_geometric.utils import dense_to_sparse
 from dataclasses import dataclass
 
 
@@ -46,6 +47,8 @@ class Circuit:
 class Hardware:
   core_capacities: torch.Tensor
   core_connectivity: torch.Tensor
+  # sparse_core_con: automatically set in init, has the core_connectivity matrix in sparse format
+  # sparse_core_ws: weights of the sparse_core_con matrix
 
 
   def __post_init__(self):
@@ -59,7 +62,8 @@ class Hardware:
       f"Core connectivity should be a square matrix, found matrix of shape {self.core_capacities.shape}"
     assert torch.all(self.core_connectivity == self.core_connectivity.T), \
       "Core connectivity matrix should be symmetric"
-  
+    self.sparse_core_con, self.sparse_core_ws = dense_to_sparse(self.core_connectivity.float())
+
   
   @property
   def n_cores(self):

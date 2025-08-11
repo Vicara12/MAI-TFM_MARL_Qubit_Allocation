@@ -3,6 +3,7 @@ import torch
 from math import log
 from torch_geometric.nn import GCNConv
 from torch_geometric.data import Data, Batch
+from torch_geometric.utils import dense_to_sparse
 from utils.customtypes import Hardware, Circuit
 from utils.circuitutils import getCircuitMatrices2xE
 
@@ -37,7 +38,6 @@ class GNNEncoder(torch.nn.Module):
     self.convs = torch.nn.ModuleList()
     for in_dim, out_dim in zip(nn_dims[:-1], nn_dims[1:]):
       self.convs.append(GCNConv(in_dim, out_dim))
-      # TODO: relu?
 
 
   def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:

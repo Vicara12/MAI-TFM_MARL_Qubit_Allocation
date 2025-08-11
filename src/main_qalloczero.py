@@ -3,6 +3,7 @@ from utils.timer import Timer
 from utils.allocutils import solutionCost, validate
 from sampler.randomcircuit import RandomCircuit
 from qalloczero.alg.alphazero import AlphaZero
+from qalloczero.models.snapshotenc import SnapEncModel
 from qalloczero.models.predmodel import PredictionModel
 from qalloczero.models.inferenceserver import InferenceServer
 from utils.customtypes import Hardware
@@ -14,16 +15,26 @@ def main():
   core_caps = torch.tensor([4,4,4,4], dtype=int)
   core_con = torch.ones(size=(len(core_caps),len(core_caps)), dtype=int) - torch.eye(n=len(core_caps), dtype=int)
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_con)
-  q_embs = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits, 2), requires_grad=True)
+  q_emb_size = 16
+  q_embs = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits, q_emb_size), requires_grad=True)
+  dummy_q_emb = torch.nn.Parameter(torch.randn(q_emb_size), requires_grad=True)
+  snap_enc = SnapEncModel(
+    nn_dims=(16,8),
+    hardware=hardware,
+    qubit_embs=q_embs,
+    dummy_qubit_emb=dummy_q_emb
+  )
   pred_mod = PredictionModel(
-     config=PredictionModel.Config(hw=hardware, mha_num_heads=4),
+     config=PredictionModel.Config(hw=hardware, circuit_emb_shape=8, mha_num_heads=4),
      qubit_embs=q_embs
   )
-  InferenceServer.setModel(pred_mod)
 
-  circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=30).sample()
+  InferenceServer.addModel("snap_enc_model", snap_enc, unpack=True)
+  InferenceServer.addModel("pred_model", pred_mod, unpack=False)
 
-  azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(2,8,8), mcts_tree_size=256)
+  circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=10).sample()
+
+  azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(16,8,8), mcts_tree_size=256)
   azero = AlphaZero(config=azero_config, qubit_embs=q_embs)
   allocations, history = azero.optimizeCircuit(circuit=circuit)
   print("\nHistory:")

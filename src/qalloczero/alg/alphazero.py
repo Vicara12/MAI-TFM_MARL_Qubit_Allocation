@@ -32,24 +32,28 @@ class AlphaZero:
 
 
   def optimizeCircuit(self, circuit: Circuit) -> Tuple[torch.Tensor, List]:
-    circuit_embeddings = self.circuit_encoder.encodeCircuits([circuit])[0]
+    circuit_embs, slice_embs = self.circuit_encoder.encodeCircuits([circuit])
     env = QubitAllocationEnvironment(circuit=circuit, hardware=self.cfg.hardware)
-    mcts = MCTS(circuit_embs=circuit_embeddings,
-                circuit=circuit,
-                hardware=self.cfg.hardware,
-                config=MCTS.Config() # Default config is good for now
-              )
+    mcts = MCTS(
+      slice_embs=slice_embs[0],
+      circuit_embs=circuit_embs[0],
+      circuit=circuit,
+      hardware=self.cfg.hardware,
+      config=MCTS.Config() # Default config is good for now
+    )
     action_history = []
 
     # Run MCTS
-    for alloc_step in circuit.alloc_steps:
+    for step_i, alloc_step in enumerate(circuit.alloc_steps):
       (_, qubits_step) = alloc_step
       alloc_to_core, n_sims = mcts.iterate(self.cfg.mcts_tree_size)
       total_cost = 0
       for qubit in qubits_step:
         total_cost += env.allocate(alloc_to_core, qubit)
       action_history.append([alloc_step, alloc_to_core, total_cost])
-      print(f" [{list(alloc_step)} -> {alloc_to_core}] sims={n_sims} c={total_cost}")
+      print((f" [{step_i+1}/{len(circuit.alloc_steps)} "
+             f"slc={alloc_step[0]} {alloc_step[1]} -> {alloc_to_core}] "
+             f"sims={n_sims} cost={total_cost}"))
     
     assert env.finished, "did not finished optimizing circuit!"
 
