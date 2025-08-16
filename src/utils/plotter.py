@@ -131,5 +131,6 @@ def drawQubitAllocation(qubit_allocation: torch.Tensor,
     ax.set_ylabel("Physical qubit")
     ax.set_aspect(num_pq/num_steps)
     plt.grid(False)
+    plt.tight_layout(pad=3)
     if show:
       plt.show()

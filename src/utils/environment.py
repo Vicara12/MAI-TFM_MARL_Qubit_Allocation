@@ -36,6 +36,13 @@ class QubitAllocationEnvironment:
     self.qubit_is_allocated[qubit] = True
     self.qubits_to_allocate -= 1
 
+    # Compute allocation cost
+    if self.current_slice_ == 0:
+      alloc_cost = 0
+    else:
+      prev_core = self.allocations[qubit, self.current_slice_-1]
+      alloc_cost = self.hardware.core_connectivity[prev_core,core].item()
+
     # If finished allocation of time slice
     if self.qubits_to_allocate == 0:
       # Check all gates have their qubits in the same core
@@ -49,11 +56,7 @@ class QubitAllocationEnvironment:
       self.qubits_to_allocate = self.circuit.n_qubits
       self.current_slice_ += 1
 
-    # Return cost of the allocation
-    if self.current_slice_ == 0:
-      return 0
-    prev_core = self.allocations[qubit, self.current_slice_-1]
-    return self.hardware.core_connectivity[prev_core,core].item()
+    return alloc_cost
         
 
   @property

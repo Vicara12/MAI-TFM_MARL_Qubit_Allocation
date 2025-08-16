@@ -12,7 +12,7 @@ from utils.plotter import drawQubitAllocation
 
 
 def main():
-  core_caps = torch.tensor([2,2,2], dtype=int)
+  core_caps = torch.tensor([4,4,4], dtype=int)
   core_con = torch.ones(size=(len(core_caps),len(core_caps)), dtype=int) - torch.eye(n=len(core_caps), dtype=int)
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_con)
   q_emb_size = 16
@@ -32,17 +32,18 @@ def main():
   InferenceServer.addModel("snap_enc_model", snap_enc, unpack=True)
   InferenceServer.addModel("pred_model", pred_mod, unpack=False)
 
-  circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=5).sample()
+  circuit = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=30).sample()
 
-  azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(16,8,8), mcts_tree_size=256)
+  azero_config = AlphaZero.Config(hardware=hardware, encoder_shape=(16,8,8), mcts_tree_size=1024)
   azero = AlphaZero(config=azero_config, qubit_embs=q_embs)
-  allocations, history = azero.optimizeCircuit(circuit=circuit)
+  with Timer.get('t0'):
+    allocations, history = azero.optimizeCircuit(circuit=circuit)
   print("\nHistory:")
   for i, piece in enumerate(history):
      print(f"{i}: {piece}")
 
   cost = solutionCost(allocations,hardware.core_connectivity)
-  print(f" -> cost={cost}")
+  print(f" -> cost={cost} time={Timer.get('t0').total_time}")
   drawQubitAllocation(allocations, core_caps, circuit.slice_gates)
 
 
