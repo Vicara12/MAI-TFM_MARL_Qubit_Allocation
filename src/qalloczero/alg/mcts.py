@@ -44,7 +44,7 @@ class MCTS:
 
     @property
     def value(self) -> float:
-      return self.value_sum/self.visit_count if self.visit_count != 0 else 0
+      return self.value_sum/self.visit_count if not self.terminal else 0
 
 
 
@@ -146,13 +146,21 @@ class MCTS:
       return
     node.children = {}
     _, qubits_to_alloc = self.circuit.alloc_steps[node.allocation_step]
-    slice_idx_children, _ = self.circuit.alloc_steps[node.allocation_step+1]
+    # The prev to terminal node has no next step, but it does have children which contains the cost
+    # of each of the actions that can be taken from it
+    pre_terminal = (node.allocation_step == len(self.circuit.alloc_steps)-1)
+    if not pre_terminal:
+      slice_idx_children, _ = self.circuit.alloc_steps[node.allocation_step+1]
 
     for action in range(self.hardware.n_cores):
       if node.policy[action] == 0:
         continue
       child = MCTS.Node()
       node.children[action] = child
+      child.cost = self.__computeActionCost(node, action)
+      if pre_terminal:
+        child.terminal = True
+        continue
 
       if slice_idx_children != node.current_slice:
         child.current_allocs = -1*torch.ones_like(node.current_allocs)
@@ -169,10 +177,7 @@ class MCTS:
         child.core_caps[action] -= len(qubits_to_alloc)
         assert child.core_caps[action] >= 0, 'Not enough space in core to expand'
       child.allocation_step = node.allocation_step+1
-      child.terminal = (child.allocation_step == len(self.circuit.alloc_steps)-1)
       child.current_slice = slice_idx_children
-      child.cost = self.__computeActionCost(node, action)
-
       child.policy, child.value_sum = self.__getNewPolicyAndValue(child)
   
 
