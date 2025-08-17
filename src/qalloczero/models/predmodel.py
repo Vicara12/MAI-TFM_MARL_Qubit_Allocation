@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Union
 from dataclasses import dataclass
 import torch
 from math import sqrt
@@ -54,18 +54,17 @@ class PredictionModel(torch.nn.Module):
 
 
   def forward(self,
-              current_alloc: Tuple[int, GateType],
+              qubits: Union[GateType, Tuple[int]],
               core_embs: torch.Tensor,
               prev_core_allocs: Optional[torch.Tensor],
               current_core_capacities: torch.Tensor,
               circuit_emb: torch.Tensor,
               slice_emb: torch.Tensor
               ) -> Tuple[torch.Tensor, float]:
-    (_, gate) = current_alloc
-    qubit_emb = torch.mean(self.qubit_embs[current_alloc[1],:], dim=0)
+    qubit_emb = torch.mean(self.qubit_embs[qubits,:], dim=0)
     context = self.context_nn(torch.concat([circuit_emb, slice_emb, qubit_emb], dim=-1)).unsqueeze(0)
     if prev_core_allocs is not None:
-      prev_cores = prev_core_allocs[gate,]
+      prev_cores = prev_core_allocs[qubits,]
       distances = torch.sum(self.cfg.hw.core_connectivity[prev_cores,:], dim=0)
     else:
       distances = torch.zeros_like(self.cfg.hw.core_capacities)

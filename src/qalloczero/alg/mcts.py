@@ -112,16 +112,19 @@ class MCTS:
   def __getNewPolicyAndValue(self, node: Node) -> Tuple[torch.Tensor, torch.Tensor]:
     if node.terminal:
       return None, 0
-    pol, v, _ = InferenceServer.inference(
+    pol, v_norm, _ = InferenceServer.inference(
       model_name="pred_model",
       unpack=False,
-      current_alloc=self.circuit.alloc_steps[node.allocation_step],
+      qubits=self.circuit.alloc_steps[node.allocation_step][1],
       core_embs=node.prev_core_embs,
       prev_core_allocs=node.prev_allocs,
       current_core_capacities=node.core_caps,
       circuit_emb=self.circuit_embs[node.current_slice],
       slice_emb=self.slice_embs[node.current_slice],
     )
+    # Convert normalized value to raw value
+    remaining_gates = self.circuit.alloc_steps[node.allocation_step][2]
+    v = v_norm*(remaining_gates+1)
     # Add exploration noise to the priors
     dir_noise = torch.distributions.Dirichlet(self.cfg.dirichlet_alpha * torch.ones_like(pol)).sample()
     pol = (1 - self.cfg.noise)*pol + self.cfg.noise*dir_noise
@@ -154,12 +157,12 @@ class MCTS:
     if node.terminal:
       return
     node.children = {}
-    _, qubits_to_alloc = self.circuit.alloc_steps[node.allocation_step]
+    _, qubits_to_alloc, _ = self.circuit.alloc_steps[node.allocation_step]
     # The prev to terminal node has no next step, but it does have children which contains the cost
     # of each of the actions that can be taken from it
     pre_terminal = (node.allocation_step == self.circuit.n_steps-1)
     if not pre_terminal:
-      slice_idx_children, _ = self.circuit.alloc_steps[node.allocation_step+1]
+      slice_idx_children, _, _ = self.circuit.alloc_steps[node.allocation_step+1]
 
     for action in range(self.hardware.n_cores):
       if node.policy[action] == 0:
@@ -193,7 +196,7 @@ class MCTS:
   def __computeActionCost(self, node: Node, action: int) -> int:
     if node.current_slice == 0:
       return 0
-    _, qubits_to_alloc = self.circuit.alloc_steps[node.allocation_step]
+    _, qubits_to_alloc, _ = self.circuit.alloc_steps[node.allocation_step]
     prev_cores = node.prev_allocs[qubits_to_alloc,]
     costs = self.hardware.core_connectivity[action, prev_cores]
     return torch.sum(costs).item()

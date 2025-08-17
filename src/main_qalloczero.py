@@ -16,7 +16,7 @@ from utils.plotter import drawQubitAllocation
 def main():
   q_emb_size = 16
   encoder_shape = (16, 8, 8)
-  core_caps = torch.tensor([4,4], dtype=int)
+  core_caps = torch.tensor([4,4,4], dtype=int)
   core_con = torch.ones(size=(len(core_caps),len(core_caps)), dtype=int) - torch.eye(n=len(core_caps), dtype=int)
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_con)
   q_embs = torch.nn.Parameter(torch.randn(hardware.n_physical_qubits, q_emb_size), requires_grad=True)
@@ -43,7 +43,7 @@ def main():
   InferenceServer.addModel("pred_model", pred_mod)
 
   sampler = RandomCircuit(num_lq=sum(core_caps).item(), num_slices=10)
-  mcts_config = MCTS.Config(target_tree_size=256)
+  mcts_config = MCTS.Config(target_tree_size=1024)
 
   azero_config = AlphaZero.Config(
     hardware=hardware,
@@ -55,7 +55,7 @@ def main():
     batch_size=3,
     sampler=sampler,
     lr=0.01,
-    v_weight=1/20,
+    v_weight=1,
     logit_weight=1
   )
   azero = AlphaZero(config=azero_config, qubit_embs=q_embs)
