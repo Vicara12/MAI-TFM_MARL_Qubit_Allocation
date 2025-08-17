@@ -40,7 +40,7 @@ class GNNEncoder(torch.nn.Module):
       self.convs.append(GCNConv(in_dim, out_dim))
 
 
-  def forward(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
+  def gnn(self, slice_matrices: List[torch.Tensor]) -> torch.Tensor:
     # TODO: check zeros
     batch = Batch.from_data_list(
       [Data(x=self.qubit_embeddings, edge_index=mat) for mat in slice_matrices])
@@ -51,12 +51,12 @@ class GNNEncoder(torch.nn.Module):
     return x
 
 
-  def encodeCircuits(self, circuits: List[Circuit]) -> Tuple[torch.Tensor, torch.Tensor]:
+  def forward(self, circuits: List[Circuit]) -> Tuple[torch.Tensor, torch.Tensor]:
     slices_per_circuit = [c.n_slices for c in circuits]
     indices = [sum(slices_per_circuit[:i]) for i in range(len(circuits)+1)]
     # Each circuit is composed as a list of matrices, join all lists into a single mega-list
     matrices = [m for c in circuits for m in getCircuitMatrices2xE(c)]
-    result = self.forward(matrices)
+    result = self.gnn(matrices)
     # Result has shape=(n_qubits*sum(c.n_slices for c in circuits), circuit_emb_size), we need to
     # first split the slices of all circuits, then apply qubitwise maxpool to get slice embeddings
     # for each time slice. Then apply positional encoding and do slicewise maxpool to get a circuit
@@ -78,4 +78,4 @@ class GNNEncoder(torch.nn.Module):
       for i in range(circuit.shape[0]):
         circuit_emb[i,:] = torch.max(circuit[i:,:], dim=0).values
       circuit_embs.append(circuit_emb)
-    return circuit_embs, slice_embs
+    return list(zip(circuit_embs, slice_embs))

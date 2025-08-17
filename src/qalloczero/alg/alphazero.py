@@ -3,71 +3,190 @@ from typing import Tuple, List
 from dataclasses import dataclass
 from sampler.circuitsampler import CircuitSampler
 from utils.customtypes import Circuit, Hardware
-from qalloczero.models.enccircuit import GNNEncoder
 from qalloczero.alg.mcts import MCTS
+from qalloczero.models.inferenceserver import InferenceServer
 from utils.environment import QubitAllocationEnvironment
+from utils.allocutils import solutionCost
 
 
 
 class AlphaZero:
-  @dataclass
-  class TrainConfig:
-    train_iters: int
-    sampler: CircuitSampler
-
 
   @dataclass
   class Config:
     hardware: Hardware
     # First item of encoder_shape determines qubit embedding size and last item circuit emb. size
     encoder_shape: Tuple[int]
-    mcts_tree_size: int
+    mcts_config: MCTS.Config
+    
+
+  @dataclass
+  class TrainConfig:
+    train_iters: int
+    batch_size: int # Number of optimized circuits per batch
+    sampler: CircuitSampler
+    lr: float
+    v_weight: float
+    logit_weight: float
+
+
+  @dataclass
+  class TrainDataItem:
+    alloc_step: int
+    current_alloc: torch.Tensor
+    prev_alloc: torch.Tensor
+    core_caps: torch.Tensor
+    curr_slice: int
+    final_logits: torch.Tensor
+    final_value: float
+
 
 
   def __init__(self, config: Config, qubit_embs: torch.Tensor):
+    assert InferenceServer.hasModel('circ_enc')
     self.cfg = config
-    self.circuit_encoder = GNNEncoder(hardware=self.cfg.hardware,
-                                      nn_dims=self.cfg.encoder_shape,
-                                      qubit_embs=qubit_embs)
+    self.optimizing_for_train = False
+  
 
-
-  def optimizeCircuit(self, circuit: Circuit) -> Tuple[torch.Tensor, List]:
-    circuit_embs, slice_embs = self.circuit_encoder.encodeCircuits([circuit])
-    env = QubitAllocationEnvironment(circuit=circuit, hardware=self.cfg.hardware)
-    mcts = MCTS(
-      slice_embs=slice_embs[0],
-      circuit_embs=circuit_embs[0],
+  def _initMCTS(self, circuit: Circuit) -> MCTS:
+    (circuit_embs, slice_embs) = InferenceServer.inference(model_name='circ_enc', unpack=True, circuits=[circuit])
+    return MCTS(
+      slice_embs=slice_embs,
+      circuit_embs=circuit_embs,
       circuit=circuit,
       hardware=self.cfg.hardware,
-      config=MCTS.Config() # Default config is good for now
+      config=self.cfg.mcts_config
     )
-    action_history = []
+
+
+  def optimize(self, circuit: Circuit) -> Tuple[torch.Tensor, float]:
+    ''' Returns tensor with qubit allocations and exploration ratio.
+    '''
+    env = QubitAllocationEnvironment(circuit=circuit, hardware=self.cfg.hardware)
+    mcts = self._initMCTS(circuit=circuit)
 
     # Run MCTS
+    n_expanded_nodes = 0
     for step_i, alloc_step in enumerate(circuit.alloc_steps):
       (_, qubits_step) = alloc_step
-      alloc_to_core, n_sims = mcts.iterate(self.cfg.mcts_tree_size)
+      alloc_to_core, _, n_sims = mcts.iterate()
+      n_expanded_nodes += n_sims
       total_cost = 0
       for qubit in qubits_step:
         total_cost += env.allocate(alloc_to_core, qubit)
-      action_history.append([alloc_step, alloc_to_core, total_cost])
-      print((f" [{step_i+1}/{len(circuit.alloc_steps)} "
+      print((f" [{step_i+1}/{circuit.n_steps} "
              f"slc={alloc_step[0]} {alloc_step[1]} -> {alloc_to_core}] "
              f"sims={n_sims} cost={total_cost}"))
     
-    assert env.finished, "did not finished optimizing circuit!"
+    theoretical_n_expanded_nodes = circuit.n_steps * \
+      self.cfg.mcts_config.target_tree_size/self.cfg.hardware.n_cores
 
+    return env.qubit_allocations, n_expanded_nodes/theoretical_n_expanded_nodes
+  
+
+  def _optimizeTrain(self, circuit: Circuit) -> Tuple[torch.Tensor, List]:
+    env = QubitAllocationEnvironment(circuit=circuit, hardware=self.cfg.hardware)
+    mcts = self._initMCTS(circuit=circuit)
+    train_data = []
+
+    # Run MCTS
+    for step_i, alloc_step in enumerate(circuit.alloc_steps):
+      root = mcts.root
+      train_data.append(AlphaZero.TrainDataItem(
+        alloc_step=alloc_step,
+        current_alloc=root.current_allocs,
+        prev_alloc=root.prev_allocs,
+        core_caps=root.core_caps,
+        curr_slice=root.current_slice,
+        final_logits=None, # Post-MCTS logits of action priors (core alloc)
+        final_value=0     # Final value (allocation cost) prediction for this node
+      ))
+      (_, qubits_step) = alloc_step
+      alloc_to_core, logits, n_sims = mcts.iterate()
+      train_data[-1].final_logits = logits
+      for qubit in qubits_step:
+        train_data[-1].final_value += env.allocate(alloc_to_core, qubit)
+    
     # Compute V for each action i by adding the total allocation cost from i until the end
     # Iterate the list of actions backwards ignoring the last item
-    for i in range(len(action_history)-2,-1,-1):
-      action_history[i][2] += action_history[i+1][2]
-        
-    return env.qubit_allocations, action_history
+    for i in range(len(train_data)-2,-1,-1):
+      train_data[i].final_value += train_data[i+1].final_value
+    return env.qubit_allocations, train_data
+
+
+  def _updateModels(self, circuits: List[Circuit], train_data: List, train_cfg: TrainConfig) -> None:
+    circ_enc = InferenceServer.model('circ_enc')
+    pred_model = InferenceServer.model("pred_model")
+    snap_enc = InferenceServer.model("snap_enc")
+
+    circ_enc.train()
+    pred_model.train()
+    snap_enc.train()
+
+    # All three models share the qubit embeddings, which is problematic (it will lead to a repeated
+    # parameter warning). This creates a set of parameters without repeated instances.
+    unique_params = list({id(p): p for p in (
+        list(circ_enc.parameters()) +
+        list(pred_model.parameters()) +
+        list(snap_enc.parameters())
+    )}.values())
+
+    optim = torch.optim.Adam(unique_params, lr=train_cfg.lr)
+    optim.zero_grad()
+
+    logit_crit = torch.nn.CrossEntropyLoss()
+    value_crit = torch.nn.MSELoss()
+    loss = 0
+
+    embs = InferenceServer.inference(model_name='circ_enc', unpack=False, circuits=circuits)
+
+    for i, (emb, tdata) in enumerate(zip(embs, train_data)):
+      (circ_emb, slice_emb) = emb
+      prev_core_allocs = None
+      empty_core_mat = -1*torch.ones(size=(circuits[i].n_qubits,), dtype=int)
+      core_embs = InferenceServer.inference(model_name="snap_enc", unpack=True, core_allocs=[empty_core_mat])
+      total_logit_loss = 0
+      total_value_loss = 0
+      for sample in tdata:
+        if prev_core_allocs is not None and prev_core_allocs != sample.prev_alloc:
+          prev_core_allocs = sample.prev_alloc
+          core_embs = InferenceServer.inference(model_name='snap_enc', unpack=True, core_allocs=[prev_core_allocs])
+
+        _, v, logits = InferenceServer.inference(
+          model_name='pred_model', unpack=False,
+          current_alloc=sample.alloc_step,
+          core_embs=core_embs,
+          prev_core_allocs=sample.prev_alloc,
+          current_core_capacities=sample.core_caps,
+          circuit_emb=circ_emb[sample.curr_slice],
+          slice_emb=slice_emb[sample.curr_slice]
+        )
+
+        logit_loss = train_cfg.logit_weight * logit_crit(logits, sample.final_logits)
+        value_loss = train_cfg.v_weight * value_crit(v, torch.tensor([sample.final_value], dtype=torch.float))
+        loss += logit_loss + value_loss
+        total_logit_loss += logit_loss.item()
+        total_value_loss += value_loss.item()
+      print(f" -optim_{i} logit_loss={total_logit_loss/len(tdata)} value_loss={total_value_loss/len(tdata)}")
+    
+    loss.backward()
+    optim.step()
+
+    circ_enc.eval()
+    pred_model.eval()
+    snap_enc.eval()
 
 
   def train(self, train_cfg: TrainConfig) -> None:
     for train_i in range(train_cfg.train_iters):
-      print(f" [*] train_{train_i}")
-      circuit = train_cfg.sampler.sample()
-      env, action_history = self.optimizeCircuit(circuit=circuit)
-      # updateModels()
+      circuits = []
+      train_data_all = []
+      print(f"[*] Loop: {train_i}/{train_cfg.train_iters}")
+      for batch_i in range(train_cfg.batch_size):
+        circuits.append(train_cfg.sampler.sample())
+        allocs, train_data = self._optimizeTrain(circuit=circuits[-1])
+        train_data_all.append(train_data)
+        sol_cost = solutionCost(allocs, self.cfg.hardware.core_connectivity)
+        print(f"  - batch_{batch_i} cost={sol_cost} ({train_data[0].final_value})")
+      print(" + Training")
+      self._updateModels(circuits=circuits, train_data=train_data_all, train_cfg=train_cfg)

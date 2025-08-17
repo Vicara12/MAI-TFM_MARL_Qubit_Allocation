@@ -18,6 +18,7 @@ class Circuit:
 
   def __post_init__(self):
     self.alloc_steps = self.__getAllocOrder()
+    self.n_steps = len(self.alloc_steps)
 
 
   def __getAllocOrder(self) -> Tuple[Tuple[int, Union[GateType, Tuple[int]]], ...]:

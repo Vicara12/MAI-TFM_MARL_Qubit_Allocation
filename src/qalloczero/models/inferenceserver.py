@@ -11,7 +11,6 @@ class InferenceServer:
   @dataclass
   class Model:
     model: Module
-    unpack: bool
 
 
 
@@ -19,23 +18,28 @@ class InferenceServer:
 
 
   @staticmethod
-  def addModel(name: str, model: Module, unpack: bool):
+  def addModel(name: str, model: Module) -> None:
     if InferenceServer.hasModel(name):
       raise Exception(f"There is already a model named \"{name}\" in the InferenceServer")
-    InferenceServer.MODELS[name] = InferenceServer.Model(model=model, unpack=unpack)
+    InferenceServer.MODELS[name] = InferenceServer.Model(model=model)
   
 
   @staticmethod
-  def hasModel(name: str):
+  def hasModel(name: str) -> bool:
     return name in InferenceServer.MODELS.keys()
+  
+
+  @staticmethod
+  def model(name: str) -> Module:
+    return InferenceServer.MODELS[name].model
 
 
   @staticmethod
-  def inference(model_name: str, *args, **kwargs):
+  def inference(model_name: str, unpack: bool, *args, **kwargs):
     if not InferenceServer.hasModel(model_name):
       raise Exception(f"No model called \"{model_name}\" has been loaded in the InferenceServer")
     model_obj = InferenceServer.MODELS[model_name]
     result = model_obj.model(*args, **kwargs)
-    if model_obj.unpack:
+    if unpack:
       return result[0]
     return result

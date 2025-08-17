@@ -77,10 +77,10 @@ class PredictionModel(torch.nn.Module):
     # Get probabilities
     K = self.__recomputeK(g_tq)
     sqrt_dk = sqrt(self.qemb_len)
-    u = torch.mm(glimpse/sqrt_dk, K.T)
+    logits = torch.mm(glimpse/sqrt_dk, K.T)
     # Illegal actions are not taken into account here as this is suppressed in the MCTS call
-    probs = self.softmax(u)
+    probs = self.softmax(logits)
 
     # Get values
     v = self.glimpse_proj_nn(glimpse.squeeze())
-    return probs.squeeze(), v
+    return probs.squeeze(), v, logits.squeeze()

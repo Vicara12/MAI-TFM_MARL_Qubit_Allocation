@@ -50,9 +50,11 @@ class MCTS:
 
   @dataclass
   class Config:
+    target_tree_size: int = 1024
     noise: float = 0.25
     dirichlet_alpha: float = 0.3
     discount_factor: float = 1.0
+    action_sel_temp: float = 0.0
     ucb_c1: float = 1.25  # As in Ref. [1]
     ucb_c2: float = 19652 # As in Ref. [1]
 
@@ -65,7 +67,7 @@ class MCTS:
                hardware: Hardware,
                config: Config):
     assert InferenceServer.hasModel("pred_model"), "No prediction model found in the InferenceServer"
-    assert InferenceServer.hasModel("snap_enc_model"), "No snapshot encoder model found in the InferenceServer"
+    assert InferenceServer.hasModel("snap_enc"), "No snapshot encoder model found in the InferenceServer"
     self.slice_embs = slice_embs
     self.circuit_embs = circuit_embs
     self.circuit = circuit
@@ -74,9 +76,9 @@ class MCTS:
     self.root = self.__buildRoot()
 
 
-  def iterate(self, target_tree_size: int) -> Tuple[int, int]:
+  def iterate(self) -> Tuple[int, int]:
     # Visit count is equal to the current size of the tree (excluding non-expanded nodes)
-    num_sims = target_tree_size - self.root.visit_count
+    num_sims = self.cfg.target_tree_size - self.root.visit_count
     for _ in range(num_sims):
       node = self.root
       search_path = [node]
@@ -86,26 +88,33 @@ class MCTS:
       if not node.terminal:
         self._expandNode(node)
       self.__backprop(search_path)
-    action = self.__selectAction(self.root)
+    action, logits = self.__selectAction(self.root, self.cfg.action_sel_temp)
     self.root = self.root.children[action]
-    return action, num_sims
+    return action, logits, num_sims
 
 
   @staticmethod
-  def __selectAction(node: Node) -> int:
-    visit_counts = torch.tensor(list(child.visit_count for child in node.children.values()),
-                                dtype=torch.float)
-    # Return a random core allocation with probability proportional to the visit count of each of
-    # the node's children
-    action_idx = torch.multinomial(visit_counts, num_samples=1).item()
-    return list(node.children.keys())[action_idx]
+  def __selectAction(node: Node, temp: float) -> int:
+    visit_counts = list(
+      node.children[child_i].visit_count if child_i in node.children else 0
+        for child_i in range(len(node.core_caps))
+    )
+    visit_counts = torch.tensor(visit_counts, dtype=torch.float)/sum(visit_counts)
+    if temp == 0:
+      action = torch.argmax(visit_counts).item()
+    else:
+      probs = torch.softmax(visit_counts/temp, dim=-1)
+      action = torch.multinomial(probs, num_samples=1)
+    # Return visit counts as they will be used later on during training as logits
+    return action, visit_counts
 
 
   def __getNewPolicyAndValue(self, node: Node) -> Tuple[torch.Tensor, torch.Tensor]:
     if node.terminal:
       return None, 0
-    pol, v = InferenceServer.inference(
+    pol, v, _ = InferenceServer.inference(
       model_name="pred_model",
+      unpack=False,
       current_alloc=self.circuit.alloc_steps[node.allocation_step],
       core_embs=node.prev_core_embs,
       prev_core_allocs=node.prev_allocs,
@@ -124,7 +133,7 @@ class MCTS:
   
 
   def __getCoreEmb(self, core_allocs: torch.Tensor) -> torch.Tensor:
-    return InferenceServer.inference(model_name="snap_enc_model", core_allocs=[core_allocs])
+    return InferenceServer.inference(model_name="snap_enc", unpack=True, core_allocs=[core_allocs])
   
 
   def __buildRoot(self) -> Node:
@@ -148,7 +157,7 @@ class MCTS:
     _, qubits_to_alloc = self.circuit.alloc_steps[node.allocation_step]
     # The prev to terminal node has no next step, but it does have children which contains the cost
     # of each of the actions that can be taken from it
-    pre_terminal = (node.allocation_step == len(self.circuit.alloc_steps)-1)
+    pre_terminal = (node.allocation_step == self.circuit.n_steps-1)
     if not pre_terminal:
       slice_idx_children, _ = self.circuit.alloc_steps[node.allocation_step+1]
 
