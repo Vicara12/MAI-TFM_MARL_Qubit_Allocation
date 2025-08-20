@@ -1,8 +1,9 @@
 import io
 from typing import Any, Dict, Optional
 import gymnasium as gym
-import torch
 import numpy as np
+from fgproee.alg.fgp import buildLookaheadWeights
+from sampler.randomcircuit import RandomCircuit
 
 
 class QubitAllocationEnv(gym.Env):
@@ -396,13 +397,13 @@ class QubitAllocationEnv(gym.Env):
     
     ### RENDERING METHODS
 
-    def capacity_bar(self, v: float) -> str:
+    def _capacity_bar(self, v: float, max_units: int = 8) -> str:
         if self.initial_capacity <= 0:
             return ""
-        units = int(round(min(v, self.initial_capacity)))
-        return "\u2588" * units + "·" * (self.initial_capacity - units)
+        units = int(round(max(0.0, min(v, float(self.initial_capacity))) * (max_units / float(self.initial_capacity))))
+        return "\u2588" * units + "·" * (max_units - units)
 
-    def _format_alloc_row(self, q: int) -> str:
+    def _alloc_info(self, q: int) -> str:
         """Show past core, current core, reservation, and a marker for the flagged qubit."""
         past_band = self._past_band()
         cur_band = self._cur_band()
@@ -434,12 +435,10 @@ class QubitAllocationEnv(gym.Env):
         vmask = self.valid_action_mask()
         allowed = np.flatnonzero(vmask)
 
-        # Capacities
         print("\nCapacities Z per core:", file=buf)
         for a in range(C):
-            print(f"  core {a}: Z={self.Z[a]:.0f}  {self.capacity_bar(self.Z[a])}", file=buf)
+            print(f"  core {a}: Z={self.Z[a]:.0f}  {self._capacity_bar(self.Z[a])}", file=buf)
 
-        # Reservations summary
         pending = np.arange(N)[self.node_features[:N, self._cur_band()].sum(axis=1) == 0]
         if pending.size:
             rcores = self.R[pending]
@@ -453,7 +452,7 @@ class QubitAllocationEnv(gym.Env):
 
         print("\nAllocations:", file=buf)
         for q in range(N):
-            print("  " + self._format_alloc_row(q), file=buf)
+            print("  " + self._alloc_info(q), file=buf)
 
         edges = self._edges_in_A1()
         print("\nA1 edges (current slice):", file=buf)
@@ -474,3 +473,27 @@ class QubitAllocationEnv(gym.Env):
         # print(f"  any_future_pair: {self._cache_any_future_pair}", file=buf)
 
         return buf.getvalue()
+    
+    
+class RandomCircuitEnv(gym.Wrapper):
+    """A wrapper for the QubitAllocationEnv that provides a random circuit sampler."""
+    
+    def __init__(self, env, num_lq, num_slices, sampler=None):
+        super().__init__(env)
+        self.num_lq = num_lq
+        self.num_slices = num_slices
+        self.sampler = sampler or RandomCircuit(num_lq=num_lq, num_slices=num_slices)
+
+    def reset(self, **kwargs):
+        _, A1 = self.sampler.sampleBatch(batch_size=1) # [1, T, N, N]
+        A1 = A1.squeeze(0) # [T, N, N]
+        #TODO: Clarify the sigma parameter
+        A2 = buildLookaheadWeights(A1, sigma=1.0) # [T, N, N]
+
+        options = dict(
+            N=self.num_lq,
+            Madj=A1.cpu().numpy(),
+            Mweights=A2.cpu().numpy(),
+            T=self.num_slices
+        )
+        return self.env.reset(options=options)

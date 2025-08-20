@@ -1,99 +1,102 @@
 # Implements GNN feature extractor for Sergi Tomás Martínez, 2025.
+from fgproee.alg.fgp import buildLookaheadWeights
+from sampler.randomcircuit import RandomCircuit
 import torch
 import torch.nn as nn
 import copy
+import gymnasium as gym
+import torch.nn.functional as F
+from torch_geometric.nn import GCNConv, GATv2Conv
+from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+from gymnasium import spaces
 
 
-class GraphConv(nn.Module):
-    """
-        Graph Convolutional Layer described in "Semi-Supervised Classification with Graph Convolutional Networks".
+class GCNN(torch.nn.Module):
+    def __init__(self, input_dim: int, hidden_dim=16):
+        super(GCNN, self).__init__()
+        self.conv1 = GCNConv(input_dim, hidden_dim)
+        self.conv2 = GCNConv(hidden_dim, hidden_dim)
 
-        Given an input feature representation for each node in a graph, the Graph Convolutional Layer aims to aggregate
-        information from the node's neighborhood to update its own representation. This is achieved by applying a graph
-        convolutional operation that combines the features of a node with the features of its neighboring nodes.
-
-        Mathematically, the Graph Convolutional Layer can be described as follows:
-
-            H' = f(D^(-1/2) * A * D^(-1/2) * H * W)
-
-        where:
-            H: Input feature matrix with shape (N, F_in), where N is the number of nodes and F_in is the number of 
-                input features per node.
-            A: Adjacency matrix of the graph with shape (N, N), representing the relationships between nodes.
-            W: Learnable weight matrix with shape (F_in, F_out), where F_out is the number of output features per node.
-            D: The degree matrix.
-    """
-    def __init__(self, input_dim, output_dim, use_bias=False):
-        super(GraphConv, self).__init__()
-
-        # Initialize the weight matrix W (in this case called `kernel`)
-        self.kernel = nn.Parameter(torch.Tensor(input_dim, output_dim))
-        nn.init.xavier_normal_(self.kernel) # Initialize the weights using Xavier initialization
-
-        # Initialize the bias (if use_bias is True)
-        self.bias = None
-        if use_bias:
-            self.bias = nn.Parameter(torch.Tensor(output_dim))
-            nn.init.zeros_(self.bias) # Initialize the bias to zeros
-
-    def forward(self, input_tensor, adj_mat):
-        """
-        Performs a graph convolution operation.
-
-        Args:
-            input_tensor (torch.Tensor): Input tensor representing node features.
-            adj_mat (torch.Tensor): Normalized adjacency matrix representing graph structure.
-
-        Returns:
-            torch.Tensor: Output tensor after the graph convolution operation.
-        """
-
-        support = torch.mm(input_tensor, self.kernel) # Matrix multiplication between input and weight matrix
-        output = torch.spmm(adj_mat, support) # Sparse matrix multiplication between adjacency matrix and support
-        # Add the bias (if bias is not None)
-        if self.bias is not None:
-            output = output + self.bias
-
-        return output
-
-
-
-class GCN(nn.Module):
-    """
-    Graph Convolutional Network (GCN) as described in the paper `"Semi-Supervised Classification with Graph 
-    Convolutional Networks" <https://arxiv.org/pdf/1609.02907.pdf>`.
-    """
-    def __init__(self, input_dim, hidden_dim, output_dim, use_bias=True, dropout_p=0.1):
-        super(GCN, self).__init__()
-
-        # Define the Graph Convolution layers
-        self.gc1 = GraphConv(input_dim, hidden_dim, use_bias=use_bias)
-        self.gc2 = GraphConv(hidden_dim, output_dim, use_bias=use_bias)
-
-
-    def forward(self, input_tensor, adj_mat):
-        """
-        Performs forward pass of the Graph Convolutional Network (GCN).
-
-        Args:
-            input_tensor (torch.Tensor): Input node feature matrix with shape (N, input_dim), where N is the number of nodes
-                and input_dim is the number of input features per node.
-            adj_mat (torch.Tensor): Normalized adjacency matrix of the graph with shape (N, N), representing the relationships between
-                nodes.
-
-        Returns:
-            torch.Tensor: Output tensor with shape (N, output_dim), representing the predicted class probabilities for each node.
-        """
-
-        x = self.gc1(input_tensor, adj_mat)
-        x = self.gc2(x, adj_mat)
-
-        return x
+    def forward(self, x, edge_index):
+        x = self.conv1(x, edge_index)
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
+        return x # [N, hidden_dim]
     
+    
+class GAT(torch.nn.Module):
+    """GATv2Conv-based Graph Attention Network. 
+    For an explanation of GATv2Conv, see: https://nn.labml.ai/graphs/gatv2/index.html"""
+    def __init__(self, input_dim: int, hidden_dim: int = 16, heads: int = 4):
+        super(GAT, self).__init__()
+        assert 16 % heads == 0
+        per_head = hidden_dim // heads
+
+        self.gat1 = GATv2Conv(input_dim, per_head, heads=heads, concat=True)
+        self.gat2 = GATv2Conv(hidden_dim, hidden_dim, heads=1, concat=True)
+
+    def forward(self, x, edge_index):
+        x = self.gat1(x, edge_index)
+        x = F.relu(x)
+        x = self.gat2(x, edge_index)
+        return x # [N, hidden_dim]
 
 
-
-class FE:
+class FeatureExtractor(BaseFeaturesExtractor):
     """Feature Extractor for Graph Neural Networks.
 
-    This class is designed to extract features from a quantum computing environment for use in reinforcement learning tasks.    """
+    This class is implemented using a GNN, a pooling function, and concatenation with the additional components of the state.
+    The pooling method is a simple readout function: the final hidden states of the nodes are concatenated from 0 to |Q|.
+    The additional components of the state (remaining core capacities) are concatenated to the output of the GNN.
+    It can either be a CGNN or a GAT.
+    Here, by hidden dim we mean the target embedding size per qubit, which is 16
+
+    Args:
+        observation_space (spaces.Dict): The observation space of the environment.
+        gnn (str): The type of GNN to use ('gcn' or 'gat').
+        hidden_dim (int): The dimension of the hidden layers in the GNN.
+        heads (int): The number of attention heads for GAT. Default is 4.
+    """
+
+    def __init__(self, observation_space: spaces.Dict, gnn="gcn", hidden_dim=16, heads=4):
+        nf_shape = observation_space["node_features"].shape
+        self.N_max = nf_shape[0]
+        self.F_nf = nf_shape[1]
+        self.C = observation_space["Z"].shape[0]
+
+        features_dim = self.F_nf * hidden_dim + self.C  # Node features + core capacities
+
+        super().__init__(observation_space, features_dim)
+
+        if gnn.lower() == 'gcn':
+            self.gnn = GCNN(self.F_nf, hidden_dim=hidden_dim)
+        elif gnn.lower() == 'gat':
+            self.gnn = GAT(self.F_nf, hidden_dim=hidden_dim, heads=heads)
+        else:
+            raise ValueError("Unsupported GNN type. Use 'gcn' or 'gat'.")
+        
+
+    def edge_index(self, A1_slice: torch.Tensor) -> torch.Tensor:
+        """Extracts the edge index from the A1 matrix."""
+        A = A1_slice["edge_index"]
+        # Remove self-loop edges
+        A.fill_diagonal_(0)
+        I, J = torch.nonzero(A > 0.0, as_tuple=True)
+
+        return torch.stack([I, J], dim=0).long()
+
+
+    def forward(self, x) -> torch.Tensor:
+        device = next(self.parameters()).device
+
+        A1 = x["A1"].to(device)
+        Z = x["Z"].to(device)
+        X = x["node_features"].to(device)
+        N = x["N"].to(device).view(-1).long()
+
+        edge_index = self.edge_index(x)
+        gnn_output = self.gnn(x, edge_index)
+        combined_features = torch.cat((gnn_output, Z), dim=-1)
+        return self.fc(combined_features)
+    
+
