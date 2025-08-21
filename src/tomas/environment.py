@@ -1,5 +1,7 @@
 import io
 from typing import Any, Dict, Optional
+import warnings
+
 import gymnasium as gym
 import numpy as np
 from fgproee.alg.fgp import buildLookaheadWeights
@@ -255,7 +257,6 @@ class QubitAllocationEnv(gym.Env):
         }
 
     def step(self, action):
-        # action: integer in [0, C-1], selects core for current qubit
         a = int(action)
         q = self.current_q
         assert self.action_space.contains(a), f"Invalid action {a}"
@@ -274,13 +275,13 @@ class QubitAllocationEnv(gym.Env):
                 effective_action = int(self.rng.choice(valid_indices))
             else:
                 # Shouldn't happen, but if no valid actions, choose randomly and raise a warning
+                #TODO: Perhaps we should truncate episode instead?
                 with_space = np.flatnonzero(self.Z > 0)
                 effective_action = int(self.rng.choice(with_space)) if with_space.size > 0 else int(self.rng.integers(0, self.C))
-                raise Warning(f"No valid actions for qubit {q}, using random action {effective_action}.")
+                warnings.warn(f"No valid actions for qubit {q}, using random action {effective_action}.", RuntimeWarning)
         else:
             effective_action = a
 
-        
         # Compute the reward 
         nonlocal_comm = self._nonlocal_comm(effective_action)
         reward = - self.alpha * nonlocal_comm - self.beta * intervened - self.gamma * attempted_direct_capacity_violation
@@ -410,7 +411,7 @@ class QubitAllocationEnv(gym.Env):
         past = self.node_features[q, past_band]
         cur = self.node_features[q, cur_band]
         past_core = np.argmax(past) if past.sum() > 0 else -1
-        cur_core  = np.argmax(cur) if cur.sum()  > 0 else -1
+        cur_core = np.argmax(cur) if cur.sum()  > 0 else -1
         mark = "\u2192" if q == self.current_q else " "
         return f"{mark} q{q:02d}  past:{past_core:2d}  curr:{cur_core:2d}  R:{self.R[q]:2d}"
 
@@ -487,7 +488,7 @@ class RandomCircuitEnv(gym.Wrapper):
     def reset(self, **kwargs):
         _, A1 = self.sampler.sampleBatch(batch_size=1) # [1, T, N, N]
         A1 = A1.squeeze(0) # [T, N, N]
-        #TODO: Clarify the sigma parameter
+        # Sigma = 1 in the document
         A2 = buildLookaheadWeights(A1, sigma=1.0) # [T, N, N]
 
         options = dict(
