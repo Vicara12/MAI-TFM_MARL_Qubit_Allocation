@@ -112,7 +112,7 @@ class MCTS:
   def __getNewPolicyAndValue(self, node: Node) -> Tuple[torch.Tensor, torch.Tensor]:
     if node.terminal:
       return None, 0
-    pol, v_norm, _ = InferenceServer.inference(
+    pol, v_norm, _ = InferenceServer.infer(
       model_name="pred_model",
       unpack=False,
       qubits=self.circuit.alloc_steps[node.allocation_step][1],
@@ -136,7 +136,7 @@ class MCTS:
   
 
   def __getCoreEmb(self, core_allocs: torch.Tensor) -> torch.Tensor:
-    return InferenceServer.inference(model_name="snap_enc", unpack=True, core_allocs=[core_allocs])
+    return InferenceServer.infer(model_name="snap_enc", unpack=True, core_allocs=[core_allocs])
   
 
   def __buildRoot(self) -> Node:

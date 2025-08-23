@@ -50,7 +50,7 @@ class AlphaZero:
   
 
   def _initMCTS(self, circuit: Circuit) -> MCTS:
-    (circuit_embs, slice_embs) = InferenceServer.inference(model_name='circ_enc', unpack=True, circuits=[circuit])
+    (circuit_embs, slice_embs) = InferenceServer.infer(model_name='circ_enc', unpack=True, circuits=[circuit])
     return MCTS(
       slice_embs=slice_embs,
       circuit_embs=circuit_embs,
@@ -143,21 +143,21 @@ class AlphaZero:
     value_crit = torch.nn.MSELoss()
     loss = 0
 
-    embs = InferenceServer.inference(model_name='circ_enc', unpack=False, circuits=circuits)
+    embs = InferenceServer.infer(model_name='circ_enc', unpack=False, circuits=circuits)
 
     for i, (emb, tdata) in enumerate(zip(embs, train_data)):
       (circ_emb, slice_emb) = emb
       prev_core_allocs = None
       empty_core_mat = -1*torch.ones(size=(circuits[i].n_qubits,), dtype=int)
-      core_embs = InferenceServer.inference(model_name="snap_enc", unpack=True, core_allocs=[empty_core_mat])
+      core_embs = InferenceServer.infer(model_name="snap_enc", unpack=True, core_allocs=[empty_core_mat])
       total_logit_loss = 0
       total_value_loss = 0
       for sample in tdata:
         if prev_core_allocs is not None and prev_core_allocs != sample.prev_alloc:
           prev_core_allocs = sample.prev_alloc
-          core_embs = InferenceServer.inference(model_name='snap_enc', unpack=True, core_allocs=[prev_core_allocs])
+          core_embs = InferenceServer.infer(model_name='snap_enc', unpack=True, core_allocs=[prev_core_allocs])
 
-        _, v, logits = InferenceServer.inference(
+        _, v, logits = InferenceServer.infer(
           model_name='pred_model', unpack=False,
           qubits=sample.qubits,
           core_embs=core_embs,
