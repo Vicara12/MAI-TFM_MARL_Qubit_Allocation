@@ -1,109 +1,76 @@
 from typing import Tuple, List
+from copy import deepcopy
 import torch
 import numpy.testing as npt
 from random import choice
 from threading import Thread
 from utils.timer import Timer
 from qalloczero.models.inferenceserver import InferenceServer
+from qalloczero.tests.test_models import SimpleModelLarge, SimpleModelSmall
 
-
-
-class SimpleModel(torch.nn.Module):
-  CREATED = False
-
-  def __init__(self):
-    super().__init__()
-    if SimpleModel.CREATED:
-      raise Exception('nope')
-    else:
-      SimpleModel.CREATED = True
-    self.fc1 = torch.nn.Sequential(
-      torch.nn.Linear(4,4),
-      torch.nn.ReLU()
-    )
-    self.fc2 = torch.nn.Sequential(
-      torch.nn.Linear(16,12),
-      torch.nn.ReLU()
-    )
-    self.fc = torch.nn.Sequential(
-      torch.nn.Linear(16,8),
-      torch.nn.ReLU(),
-      torch.nn.Linear(8,4),
-      torch.nn.ReLU()
-    )
-    self.fc_v = torch.nn.Linear(4,1)
-  
-  @staticmethod
-  def input_sizes() -> Tuple[int, int]:
-    return 4, 16
-  
-  def forward(self, x0: torch.Tensor, x1: torch.Tensor, flag: List[bool]) -> Tuple[torch.Tensor, torch.Tensor]:
-    x0 = self.fc1(x0)
-    x0[flag,:] = 1 - x0[flag,:]
-    x1 = self.fc2(x1)
-    x = torch.concat([x0, x1], axis=-1)
-    y0 = self.fc(x)
-    y1 = self.fc_v(y0)
-    return y0, y1
-  
-  def unbatched_forward(self, x0: torch.Tensor, x1: torch.Tensor, flag: bool) -> Tuple[torch.Tensor, torch.Tensor]:
-    y0, y1 = self(x0=x0.unsqueeze(0), x1=x1.unsqueeze(0), flag=[flag])
-    return y0.squeeze(0), y1.squeeze(0)
+model_class = SimpleModelLarge
 
 def make_inputs():
-  x0_size, x1_size = SimpleModel.input_sizes()
-  return torch.randn((x0_size,)), torch.randn((x1_size,)), choice([True, False])
+  x0_size, x1_size = model_class.input_sizes()
+  return torch.randn((x0_size,)), torch.randn((x1_size,)), torch.tensor([choice([True, False])])
 
 
-def work(n_reqs: int, worker_id: int) -> float:
+def compare_eq(is_y0, is_y1, y0, y1):
+  npt.assert_almost_equal(is_y0.detach().numpy(), y0.detach().numpy(), decimal=5)
+  npt.assert_almost_equal(is_y1.detach().numpy(), y1.detach().numpy(), decimal=5)
+
+
+def work(n_reqs: int, worker_id: int, raw_model: torch.nn.Module) -> float:
   is_model = InferenceServer.get('model')
-  raw_model = is_model.model
   timer = Timer(str(worker_id))
   for _ in range(n_reqs):
     x0, x1, flag = make_inputs()
+    y0, y1 = raw_model.unbatched_forward(x0=x0, x1=x1, flag=flag)
+    # print(f" ----- {worker_id} -----\n{x0 = }\n{x1 = }\n{flag = }\n\n{y0 = }\n{y1 = }")
     with timer:
       is_y0, is_y1 = is_model.infer(x0=x0, x1=x1, flag=flag)
-    y0, y1 = raw_model.unbatched_forward(x0=x0, x1=x1, flag=flag)
-    npt.assert_almost_equal(is_y0.detach().numpy(), y0.detach().numpy())
-    npt.assert_almost_equal(is_y1.detach().numpy(), y1.detach().numpy())
+    compare_eq(is_y0, is_y1, y0, y1)
 
 
-def test_correctness(n_threads: int, n_reqs: int):
-  threads = [Thread(target=work, args=(n_reqs, i), daemon=True) for i in range(n_threads)]
+def test_correctness(n_threads: int, n_reqs: int, raw_model: torch.nn.Module):
+  threads = [Thread(target=work, args=(n_reqs, i, raw_model), daemon=True) for i in range(n_threads)]
   for thread in threads:
     thread.start()
   for thread in threads:
     thread.join()
   results = [Timer.get(str(i)).total_time for i in range(n_threads)]
-  print(results)
-
-
-def test_correctness_single() -> None:
+  print(f"time_per_thread = {results}")
+  print(f"mean_time = {sum(results)/len(results)}")
   is_model = InferenceServer.get('model')
-  raw_model = is_model.model
-  x0, x1, flag = make_inputs()
-  y0, y1 = raw_model.unbatched_forward(x0=x0, x1=x1, flag=flag)
-  print(f"{x0 = }\n{x1 = }\n{flag = }\n\n{y0 = }\n{y1 = }")
-  is_y0, is_y1 = is_model.infer(x0=x0, x1=x1, flag=flag)
-  npt.assert_almost_equal(is_y0.detach().numpy(), y0.detach().numpy())
-  npt.assert_almost_equal(is_y1.detach().numpy(), y1.detach().numpy())
+  print(f"batch_performance = {is_model.batch_performance}")
+
+
+def test_correctness_single(raw_model: torch.nn.Module) -> None:
+  work(1, 0, raw_model)
+  print("Single comparison OK!")
 
 
 def main_test_is():
-  x0_size, x1_size = SimpleModel.input_sizes()
+  x0_size, x1_size = model_class.input_sizes()
+  raw_model = model_class()
+  raw_model_is = deepcopy(raw_model)
+  raw_model_is.to('cuda')
   InferenceServer(model_cfg=InferenceServer.ModelCfg(
       name="model",
-      model=SimpleModel(),
+      model=raw_model_is,
+      inference_device='cuda',
       supports_batch=True,
-      max_batch_size=4,
-      parameters={'x0': (True, (x0_size,)), 'x1': (True, (x1_size,)), 'flag': (False,)},
+      parameters=dict(
+        x0=(torch.float32, (x0_size,)),
+        x1=(torch.float32, (x1_size,)),
+        flag=(torch.bool,  (1,)) 
+      ),
       flexible_input_size=False
-    )
+    ),
+    max_batch_size=16
   )
-  # test_correctness_single()
-  test_correctness(4, 32)
+
+  # test_correctness_single(raw_model)
+  test_correctness(n_threads=64, n_reqs=16, raw_model=raw_model)
+  # test_correctness(n_threads=64, n_reqs=128, raw_model=raw_model)
   # test_correctness(4, 8)
-
-
-if __name__ == '__main__':
-  main_test_is()
