@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 import torch
 import torch.nn as nn
 
@@ -19,26 +19,27 @@ class QAContextEmbedding(nn.Module):
     def __init__(
         self,
         embed_dim: int,
-        max_qubits: int,
         use_communication: bool = True,
         num_communication_layers: int = 1,
         use_final_norm: bool = False,
-        distance_matrix: torch.Tensor = None,
-        concat_max_members: int = 2,
+        grouper: Optional[DynamicAgentGrouper] = None,
+        grouper_kwargs: Optional[dict] = None,
         **communication_layer_kwargs,
     ):
         super().__init__()
 
         # Agents embeddings (both global and contextual) are precomputed in initial embedding
         # so we've already called those, now we just need to retrieve the index we need
+        grouper_kwargs = grouper_kwargs or {}
         layer_kwargs = dict(communication_layer_kwargs)
-
-        self.grouper = DynamicAgentGrouper(
-            max_qubits=max_qubits, 
-            embed_dim=embed_dim, 
-            distance_matrix=distance_matrix,
-            concat_max_members=concat_max_members,
-        )
+        
+        if grouper is None:
+            self.grouper = DynamicAgentGrouper(
+                embed_dim=embed_dim, 
+                **grouper_kwargs
+            )
+        else:
+            self.grouper = grouper
 
         self.core_feature_enc = CoreFeatureEncoder(
             embed_dim=embed_dim,
@@ -71,11 +72,6 @@ class QAContextEmbedding(nn.Module):
         self.project_global = nn.Linear(2*embed_dim, embed_dim)
 
     def _agent_state_embedding(self, embeddings, global_embeddings=None, **kwargs):
-        # Global embedding might not add new information
-        #if embeddings.dim() == 4:
-            #slice_idx = td["current_slice"]
-            #agent_slice_embeds = gather_by_index(embeddings, slice_idx, dim=1)  # [B, Q, d]
-        #else:
         agent_slice_embeds = embeddings  # already [B, Q, d]
 
         if global_embeddings is not None:
@@ -97,12 +93,10 @@ class QAContextEmbedding(nn.Module):
             core_connectivity: torch.Tensor = None,
             adj_matrix: torch.Tensor = None,
             action_mask: torch.Tensor = None,
-            q_to_agent: torch.Tensor = None,
-            max_agents: int = None,
         ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         
         # Gather the agent embeddings
-        agent_embeds = self._agent_state_embedding(slice_embds)  # [B, Q, d] -> [B, Agents, C, d]
+        agent_embeds = self._agent_state_embedding(slice_embds) 
 
         # Agent embeddings
         grouped_agent_emds, agent_mask, agent_demands, final_action_mask = self.grouper(
@@ -111,41 +105,33 @@ class QAContextEmbedding(nn.Module):
             current_core_allocs=current_core_allocs,
             core_connectivity=core_connectivity,
             adj_matrix=adj_matrix,
-            action_mask=action_mask,
-            q_to_agent=q_to_agent,
-            max_agents=max_agents)  # [B, Q, d] -> [B, Agents, C, d]
+            action_mask=action_mask
+            )  # [Q, d] -> [Agents, C, d]
 
         # Gather core embeddings (capacity)
-        core_embeds = self.core_feature_enc(core_capacities, core_size=core_size)  # [B, C, d]
+        core_embeds = self.core_feature_enc(core_capacities, core_size=core_size)  # [C, d]
 
-        agent_embeds = grouped_agent_emds + core_embeds.unsqueeze(1)  # [B, Agents, C, d]
+        agent_embeds = grouped_agent_emds + core_embeds  # [Agents, C, d]
 
         if self.use_communication:
-            if agent_embeds.dim() == 4:
-                B, Agents, C, d = agent_embeds.shape
+            if agent_embeds.dim() == 3:
+                _, C, _ = agent_embeds.shape
 
-                # [B, Agents, C, d] -> [B, C, Agents, d] -> [B*C, Agents, d]
-                q_view = agent_embeds.permute(0, 2, 1, 3).reshape(B * C, Agents, d)
+                # [Agents, C, d] -> [C, Agents, d]
+                q_view = agent_embeds.permute(1, 0, 2)
                 # we must mask the padding agents so they don't participate!
-                q_mask = agent_mask.repeat_interleave(C, dim=0) # [B, Agents] -> [B*C, Agents]
+                q_mask = agent_mask.unsqueeze(0).repeat_interleave(C, dim=0) # [Agents] -> [C, Agents]
                 padding_mask = ~q_mask
                 for layer in self.q_layers:
                     q_view = layer(q_view, mask=padding_mask)
-                # [B, C, Agents, d] -> [B, Agents, C, d]
-                agent_embeds = q_view.view(B, C, Agents, d).permute(0, 2, 1, 3)
+                # [C, Agents, d] -> [Agents, C, d]
+                agent_embeds = q_view.permute(1, 0, 2)
 
-                # [B, Agents, C, d] -> [B*Agents, C, d]
-                c_view = agent_embeds.reshape(B * Agents, C, d)
-                c_view = self.c_layers(c_view)
-                agent_embeds = c_view.view(B, Agents, C, d)
+                # [Agents, C, d]
+                agent_embeds = self.c_layers(agent_embeds)
 
         if self.norm is not None:
-            if agent_embeds.dim() == 4:
-                B, Agents, C, d = agent_embeds.shape
-                norm_view = agent_embeds.view(B, Agents * C, d)
-                norm_view = self.norm(norm_view)
-                agent_embeds = norm_view.view(B, Agents, C, d)
-            else:
-                agent_embeds = self.norm(agent_embeds)
+            # TODO: Make sure batchnorm isn't used here
+            agent_embeds = self.norm(agent_embeds)
 
         return agent_embeds, agent_mask, agent_demands, final_action_mask

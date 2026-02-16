@@ -30,27 +30,27 @@ class QADecoder(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            agent_embeds: [B, Agents, C, H] agent-core features.
-            action_mask: [B, Agents, C+1] boolean mask of valid actions (last column = buffer).
-            agent_mask: [B, Agents] optional mask indicating which agents are real (False for padding).
+            agent_embeds: [Agents, C, H] agent-core features.
+            action_mask: [Agents, C+1] boolean mask of valid actions (last column = buffer).
+            agent_mask: [Agents] optional mask indicating which agents are real (False for padding).
 
         Returns:
-            logits: [B, Agents, C+1] masked logits (``-inf`` for invalid actions).
-            final_mask: [B, Agents, C+1] mask actually used for masking/logits.
+            logits: [Agents, C+1] masked logits (``-inf`` for invalid actions).
+            final_mask: [Agents, C+1] mask actually used for masking/logits.
         """
-        if agent_embeds.dim() != 4:
-            raise ValueError("agent_embeds must have shape [B, Agents, C, H]")
+        if agent_embeds.dim() != 3:
+            raise ValueError("agent_embeds must have shape [Agents, C, H]")
 
-        B, Agents, C, H = agent_embeds.shape
+        Agents, C, H = agent_embeds.shape
 
         # Append learnable buffer embedding so each agent always has a fallback option.
-        buffer_emb = self.buffer.view(1, 1, 1, H).expand(B, Agents, -1, -1)
-        features = torch.cat((agent_embeds, buffer_emb), dim=2)  # [B, Agents, C+1, H]
+        buffer_emb = self.buffer.view(1, 1, H).expand(Agents, -1, -1)
+        features = torch.cat((agent_embeds, buffer_emb), dim=1)  # [Agents, C+1, H]
         
         #TODO: I think it's safe to remove this check
         if action_mask.shape[-1] == C:
             # Tolerate missing buffer mask by assuming buffer is always allowed.
-            buffer_mask = torch.ones(B, Agents, 1, dtype=action_mask.dtype, device=action_mask.device)
+            buffer_mask = torch.ones(Agents, 1, dtype=action_mask.dtype, device=action_mask.device)
             final_mask = torch.cat((action_mask, buffer_mask), dim=-1)
         else:
             final_mask = action_mask.clone()

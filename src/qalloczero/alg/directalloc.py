@@ -8,6 +8,7 @@ from time import time
 from typing import Self, Tuple, Optional, Any
 from copy import deepcopy
 from dataclasses import dataclass, asdict
+from src.utils.conflict_handler import AGENT_HANDLER_REGISTRY, NoHandler
 from src.utils.customtypes import Circuit, Hardware
 from src.utils.allocutils import sol_cost, get_all_checkpoints
 from scipy.stats import ttest_ind
@@ -17,7 +18,7 @@ from src.utils.memory import get_ram_usage
 from src.sampler.hardwaresampler import HardwareSampler
 from src.sampler.circuitsampler import CircuitSampler
 from src.qalloczero.alg.ts import ModelConfigs
-from src.qalloczero.models.predmodel import MAPredictionModel, PredictionModel
+from src.qalloczero.models.predmodel import PredictionModel, PredictionModel
 from src.utils.environment import QubitAllocationEnvironment, ENV_REGISTRY
 from src.utils.other_utils import gather_by_index
 
@@ -55,6 +56,7 @@ class DirectAllocator:
     hardware_sampler: HardwareSampler
     mask_invalid: bool
     dropout: float = 0.0
+    use_init_logp: bool = True
 
 
   def __init__(
@@ -65,7 +67,7 @@ class DirectAllocator:
     env: str = 'qa',
         ):
     self.model_cfg = model_cfg
-    self.pred_model = MAPredictionModel(
+    self.pred_model = PredictionModel(
       embed_size=model_cfg.embed_size,
       circuit_embds_kwargs=model_cfg.circuit_embds_kwargs,
       context_embds_kwargs=model_cfg.context_embds_kwargs,
@@ -73,6 +75,12 @@ class DirectAllocator:
     self.pred_model.to(device)
     self.mode = mode
     self.env = ENV_REGISTRY[env]()
+
+    # TODO: Change to none and pass args
+    agent_handler_type = model_cfg.conflict_handler_kwargs.pop("type", "highprob")
+    agent_handler = AGENT_HANDLER_REGISTRY.get(agent_handler_type, NoHandler)
+    self.conflict_handler = agent_handler(**model_cfg.conflict_handler_kwargs)
+    
   
 
   @property
@@ -587,6 +595,7 @@ class DirectAllocator:
   ):
     device = self.device
     self.pred_model.output_logits(True)
+    self.pred_model.output_demands(True) # used in the conflict handler
     self.env.reset(circuit=circuit, hardware=hardware)
 
     env_device = hardware.core_capacities.device
@@ -600,23 +609,15 @@ class DirectAllocator:
       all_probs: list[torch.Tensor] = []
       all_valid: list[torch.Tensor] = []
 
-
     step = 0
     # Get the embeddings of all the slices at once
     #TODO: We'll remove the batch dim for the whole pipeline
-    adj_matrices = circuit.adj_matrices.unsqueeze(0).to(device)
+    adj_matrices = circuit.adj_matrices.to(device)
     slice_embds = self.pred_model.get_circuit_embds(adj_matrices)
     
     while not self.env.finished:
       slice_idx = self.env.current_slice
 
-      # Use qubit-level mask; agent grouping is handled inside the model/grouper.
-      if hasattr(self.env, "agent_mapping"):
-        q_to_agent, num_agents, max_agents = self.env.agent_mapping
-      else:
-        q_to_agent = torch.arange(circuit.n_qubits, device=self.env.current_assignment.device)
-        num_agents = circuit.n_qubits
-        max_agents = num_agents
       action_mask = self.env.get_mask().to(device)
 
       if slice_idx == 0:
@@ -630,26 +631,26 @@ class DirectAllocator:
       core_caps = core_caps_vec.to(device)
 
       # Retrieve the embedding for this slice 
-      # NOTE: remember to be consistent with the batch dimension
       # TODO: Perhaps our code could be parallelized for GRPO
       # we would have to change the way we handle the env... 
-      slice_embd = slice_embds[:, slice_idx, :, :]
-      logits, final_mask, _ = self.pred_model(
+      # NOTE: right now we don't have padding
+      slice_embd = slice_embds[slice_idx, :, :]
+      output = self.pred_model(
         slice_embd,
-        prev_core_allocs=prev_core_allocs.unsqueeze(0),
-        current_core_allocs=curr_core_allocs.unsqueeze(0),
+        prev_core_allocs=prev_core_allocs,
+        current_core_allocs=curr_core_allocs,
         core_capacities=core_caps,
         core_size=hardware.core_capacities.to(device),
         core_connectivity=hardware.core_connectivity.to(device),
-        adj_matrix=adj_matrices[:, slice_idx, :, :].to(device),
+        adj_matrix=adj_matrices[slice_idx, :, :].to(device),
         action_mask=action_mask,
-        q_to_agent=q_to_agent,
-        max_agents=max_agents,
       )
-      # Keep only real agents to avoid padded rows turning into NaNs
-      logits = logits[:, :num_agents, :]
-      final_mask = final_mask[:, :num_agents, :]
 
+      logits = output.logits
+      final_mask = output.final_mask
+      agent_demands = output.agent_demands
+      probs = output.probs
+      
       # Ensure every agent has at least the buffer action valid to avoid NaNs
       assert (~final_mask.any(dim=-1)).all().item() == False, \
         "Invalid final mask with no valid actions for some agents"
@@ -668,28 +669,31 @@ class DirectAllocator:
 
       # TODO: Let's call conflict handler. It will return the valid actions
       # Problem: how can I use the conflicts in the reward?
+      final_actions, conflict_mask, halting_ratio = self.conflict_handler(
+        actions=actions,
+        probs=probs,
+        core_capacities=core_caps,
+        agent_demands=agent_demands,
+        buffer_index=hardware.n_cores
+      )
 
+      # We assume the agent only selects valid actions (guaranteed by decoder masking)
+      if conflict_mask is not None:
+        valid = ~conflict_mask
+      else:
+        valid = torch.ones_like(actions, dtype=torch.bool)
 
-      #TODO: this is where we map agents to qubits again
-      buffer_idx = actions.shape[-1] - 1
-      padded_actions = torch.full((actions.shape[0], max_agents), buffer_idx, device=actions.device, dtype=actions.dtype)
-      padded_actions[:, :num_agents] = actions
-      q_actions, _, _ = map_agent_to_qubit(padded_actions.to(env_device), q_to_agent.to(env_device), max_agents)
-
-
-
-      #TODO: can no longer compute valid actions like this
-      # because there might be additional conflicts that weren't masked
-      valid = final_mask.gather(1, actions.unsqueeze(1)).squeeze(1)
+      actions_gather = actions if hasattr(cfg, 'use_init_logp') and cfg.use_init_logp else final_actions
       if ret_train_data:
-        all_probs.append(log_pol.gather(1, actions.unsqueeze(1)).squeeze(1).detach())
+        all_probs.append(log_pol.gather(1, actions_gather.unsqueeze(1)).squeeze(1).detach())
         all_valid.append(valid.detach())
 
-      actions_q = self.env.current_assignment.clone()
-      actions_cpu = actions.to(actions_q.device)
-      for agent_idx in range(num_agents):
-        qs = (q_to_agent == agent_idx).nonzero(as_tuple=False).flatten()
-        actions_q[qs] = actions_cpu[agent_idx]
+      actions_q = self.pred_model.grouper.agents_to_qubits(
+        final_actions, 
+        max_agents=circuit.n_qubits, 
+        current_core_allocs=curr_core_allocs, 
+        num_cores=hardware.n_cores
+      )
 
       self.env.allocate(actions_q)
       step += 1
@@ -759,6 +763,7 @@ class DirectAllocator:
       mask_invalid=train_cfg.mask_invalid,
       greedy=False,
     )
+    opt_cfg.use_init_logp = train_cfg.use_init_logp
     data_log = dict(
       train_cfg = dict(
         inference_mode=str(self.mode),
@@ -775,6 +780,7 @@ class DirectAllocator:
         min_noise=train_cfg.min_noise,
         mask_invalid=train_cfg.mask_invalid,
         dropout=train_cfg.dropout,
+        use_init_logp=train_cfg.use_init_logp,
         allocator=str(train_cfg.circ_sampler)
       ),
       advantage_extremes = [],

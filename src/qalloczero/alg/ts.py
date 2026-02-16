@@ -34,6 +34,7 @@ class ModelConfigs:
     num_layers: int = 4
     circuit_embds_kwargs: dict = field(default_factory=dict)
     context_embds_kwargs: dict = field(default_factory=dict)
+    conflict_handler_kwargs: dict = field(default_factory=dict)
 
 
 class TSEngine(ABC):

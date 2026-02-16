@@ -25,7 +25,8 @@ class PositionalEncoder(torch.nn.Module):
     def forward(self, x, add=True):
         """
         Args:
-            x: Input tensor of shape [batch, seq_len, ...] or [batch, num_slices, num_qubits, hidden_dim]
+            x: Input tensor of shape [batch, seq_len, ...], [batch, num_slices, num_qubits, hidden_dim] or 
+            [seq_len, num_qubits, hidden_dim]
             add: Whether to add PE to input or return PE only
         """
         # This check is for QA
@@ -33,5 +34,14 @@ class PositionalEncoder(torch.nn.Module):
             seq_len = x.shape[1]  # num_slices
             pe = self.pe[:, :seq_len].unsqueeze(2)  # [1, seq_len, 1, hidden_dim]
             return x + pe if add else pe
-        else:  # Original behavior for other cases
-            return x + self.pe[:, : x.shape[1]] if add else self.pe[:, : x.shape[1]]
+        if x.dim() == 3:
+            if x.shape[0] > x.shape[1]:  # assume [B, S, D]
+                seq_len = x.shape[1]
+                pe = self.pe[:, :seq_len]  # [1, S, D]
+                return x + pe if add else pe
+            else:  # [S, Q, D] or [S, D]
+                seq_len = x.shape[0]
+                pe = self.pe[:, :seq_len].squeeze(0)  # [S, D]
+                if x.shape[1] != seq_len:  # [S, Q, D]
+                    pe = pe.unsqueeze(1)  # [S, 1, D]
+                return x + pe if add else pe
