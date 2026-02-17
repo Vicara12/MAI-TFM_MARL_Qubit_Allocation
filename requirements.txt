@@ -4,3 +4,4 @@ qiskit
 pandas
 objgraph
 psutil
+wandb

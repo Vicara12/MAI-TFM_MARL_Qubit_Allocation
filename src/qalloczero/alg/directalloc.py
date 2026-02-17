@@ -57,6 +57,13 @@ class DirectAllocator:
     mask_invalid: bool
     dropout: float = 0.0
     use_init_logp: bool = True
+    wandb_enable: bool = False
+    wandb_project: Optional[str] = None
+    wandb_entity: Optional[str] = None
+    wandb_run_name: Optional[str] = None
+    wandb_group: Optional[str] = None
+    wandb_tags: Optional[list[str]] = None
+    wandb_notes: Optional[str] = None
 
 
   def __init__(
@@ -112,6 +119,37 @@ class DirectAllocator:
       os.makedirs(path)
     self._save_model_cfg(path)
     return path
+
+
+  def _init_wandb(
+    self,
+    train_cfg: TrainConfig,
+    save_path: str,
+    wandb_config: dict[str, Any],
+  ):
+    if not train_cfg.wandb_enable:
+      return None
+    try:
+      import wandb
+    except ImportError as exc:
+      raise ImportError(
+        "Weights & Biases logging is enabled but the 'wandb' package is missing. "
+        "Install it with 'pip install wandb' to proceed."
+      ) from exc
+    run_name = train_cfg.wandb_run_name or os.path.basename(save_path.rstrip(os.sep))
+    wandb.init(
+      project=train_cfg.wandb_project or "direct-allocator",
+      entity=train_cfg.wandb_entity,
+      name=run_name,
+      group=train_cfg.wandb_group,
+      tags=train_cfg.wandb_tags,
+      notes=train_cfg.wandb_notes,
+      config=wandb_config,
+      dir=save_path,
+    )
+    wandb.define_metric("iter")
+    wandb.define_metric("*", step_metric="iter")
+    return wandb
 
 
   def save(self, path: str, overwrite: bool = False):
@@ -349,7 +387,14 @@ class DirectAllocator:
         mask_invalid=train_cfg.mask_invalid,
         dropout=train_cfg.dropout,
         use_init_logp=train_cfg.use_init_logp,
-        allocator=str(train_cfg.circ_sampler)
+        allocator=str(train_cfg.circ_sampler),
+        wandb_enable=train_cfg.wandb_enable,
+        wandb_project=train_cfg.wandb_project,
+        wandb_entity=train_cfg.wandb_entity,
+        wandb_run_name=train_cfg.wandb_run_name,
+        wandb_group=train_cfg.wandb_group,
+        wandb_tags=train_cfg.wandb_tags,
+        wandb_notes=train_cfg.wandb_notes,
       ),
       advantage_extremes = [],
       val_cost = [],
@@ -364,6 +409,7 @@ class DirectAllocator:
     init_t = time()
     best_model = dict(val_cost=None, vc_mean=None)
     save_path = self._make_save_dir(train_cfg.store_path, overwrite=False)
+    wandb_logger = self._init_wandb(train_cfg, save_path, deepcopy(data_log['train_cfg']))
 
     try:
       for it in range(train_cfg.train_iters):
@@ -386,6 +432,16 @@ class DirectAllocator:
           vc_mean = val_cost.mean().item()
           data_log['val_cost'].append(vc_mean)
           print(f"\033[2K\r      vc={vc_mean:.4f}, ", end='')
+          val_std = val_cost.std(unbiased=False).item()
+          if wandb_logger is not None:
+            wandb_logger.log(
+              {
+                "iter": it + 1,
+                "val_cost": vc_mean,
+                "val_cost_std": val_std,
+              },
+              step=it + 1,
+            )
           if best_model['val_cost'] is None:
             best_model = self._update_best(val_cost, save_path, it)
           else:
@@ -417,14 +473,38 @@ class DirectAllocator:
         data_log['cost_loss'].append(cost_loss)
         data_log['val_loss'].append(val_loss)
         data_log['noise'].append(opt_cfg.noise)
-        data_log['t'].append(time() - init_t)
+        elapsed = time() - init_t
+        data_log['t'].append(elapsed)
         data_log['vm'].append(vm_ratio)
         data_log['advantage_extremes'].append(adv_ext)
+        adv_min = adv_max = None
+        if isinstance(adv_ext, list) and len(adv_ext) > 0:
+          adv_min = min(v[0] for v in adv_ext)
+          adv_max = max(v[1] for v in adv_ext)
+        elif isinstance(adv_ext, tuple):
+          adv_min, adv_max = adv_ext
+        if wandb_logger is not None:
+          wandb_payload = dict(
+            iter=it + 1,
+            loss=loss,
+            cost_loss=cost_loss,
+            val_loss=val_loss,
+            noise=opt_cfg.noise,
+            valid_move_ratio=vm_ratio,
+            elapsed_s=elapsed,
+          )
+          if adv_min is not None and adv_max is not None:
+            wandb_payload['advantage_min'] = adv_min
+            wandb_payload['advantage_max'] = adv_max
+          wandb_logger.log(wandb_payload, step=it + 1, commit=False)
         opt_cfg.noise = max(train_cfg.min_noise, opt_cfg.noise*train_cfg.noise_decrease_factor)
 
     except KeyboardInterrupt as e:
       if 'y' not in input('\nGraceful shutdown? [y/n]: ').lower():
         raise e
+    finally:
+      if wandb_logger is not None:
+        wandb_logger.finish()
     torch.save(self.pred_model.state_dict(), os.path.join(save_path, "pred_mod.pt"))
     with open(os.path.join(save_path, "train_data.json"), "w") as f:
       json.dump(data_log, f, indent=2)

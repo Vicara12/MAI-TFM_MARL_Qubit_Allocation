@@ -10,7 +10,7 @@ from src.utils.customtypes import Hardware
 from src.utils.environment import QubitAllocationEnvironment
 
 
-def train_model_da(allocator, name: str):
+def train_model_da(allocator, name: str, use_wandb: bool = False, wandb_project: str | None = None):
   validation_hardware = Hardware(
     core_capacities=torch.tensor([4]*4),
     core_connectivity=(torch.ones(4,4) - torch.eye(4))
@@ -38,11 +38,14 @@ def train_model_da(allocator, name: str):
     mask_invalid=True,
     hardware_sampler=HardwareSampler(max_nqubits=16, range_ncores=[2,8]),
     dropout=0.0,
+    wandb_enable=use_wandb,
+    wandb_project=wandb_project,
+    wandb_run_name=name,
   )
   allocator.train(train_cfg)
 
 
-def finetune_model_da(name: str):
+def finetune_model_da(name: str, use_wandb: bool = False, wandb_project: str | None = None):
   allocator = DirectAllocator.load(f'trained/{name}', checkpoint=-1).set_mode(DirectAllocator.Mode.Fast)
   validation_hardware = Hardware(
     core_capacities=torch.tensor([4]*4),
@@ -71,6 +74,9 @@ def finetune_model_da(name: str):
     mask_invalid=True,
     hardware_sampler=HardwareSampler(max_nqubits=16, range_ncores=[2,8]),
     dropout=0.0,
+    wandb_enable=use_wandb,
+    wandb_project=wandb_project,
+    wandb_run_name=f"{name}_ft",
   )
   allocator.train(train_cfg)
 
@@ -93,7 +99,7 @@ if __name__ == "__main__":
       ),
     env='qa',
   )
-  train_model_da(allocator, name="da")
+  train_model_da(allocator, name="da", use_wandb=True, wandb_project="MQA")
 
   ''' Refine a direct allocator model '''
   # finetune_model_da(name="da")
