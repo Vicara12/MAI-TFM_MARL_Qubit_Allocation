@@ -72,8 +72,7 @@ class QAContextEmbedding(nn.Module):
         self.project_global = nn.Linear(2*embed_dim, embed_dim)
 
     def _agent_state_embedding(self, embeddings, global_embeddings=None, **kwargs):
-        agent_slice_embeds = embeddings  # already [B, Q, d]
-
+        agent_slice_embeds = embeddings  # already [Q, d]
         if global_embeddings is not None:
             agent_embds = torch.cat([agent_slice_embeds, global_embeddings], dim=-1)
             return self.project_global(agent_embds)
@@ -120,6 +119,7 @@ class QAContextEmbedding(nn.Module):
                 # [Agents, C, d] -> [C, Agents, d]
                 q_view = agent_embeds.permute(1, 0, 2)
                 # we must mask the padding agents so they don't participate!
+                # NOTE: this is actually not necessary since we're not using padding
                 q_mask = agent_mask.unsqueeze(0).repeat_interleave(C, dim=0) # [Agents] -> [C, Agents]
                 padding_mask = ~q_mask
                 for layer in self.q_layers:

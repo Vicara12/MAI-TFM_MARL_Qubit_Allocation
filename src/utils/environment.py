@@ -60,9 +60,10 @@ class QubitAllocationEnvironment:
     '''
     # Capacities are recomputed at each decoding step (successive steps within a slice!)
     # based on the current allocation
-    core_fill = torch.bincount(cores, minlength=self.hardware.n_cores)
-    self.current_core_caps[:-1] = self.hardware.core_capacities - core_fill
-    self.current_core_caps[-1] = self.circuit.n_qubits
+    core_fill = torch.bincount(cores, minlength=self.hardware.n_cores+1)
+    self.current_core_caps[:-1] = self.hardware.core_capacities - core_fill[:-1]
+    self.current_core_caps[-1] = self.circuit.n_qubits # TODO: Is this needed? In the agent handler we set this capacity to 
+    # a max number. We're doing this twice. 
     
     if self.validate_solution:
       assert self.current_slice_ < self.circuit.n_slices, "Tried to allocate past the end of the circuit"
@@ -96,8 +97,10 @@ class QubitAllocationEnvironment:
         
       self.stage = 0
       self.current_slice_ += 1
+      # reset current assignment
+      self.current_assignment = torch.full_like(cores, self.hardware.n_cores) 
 
-    return alloc_cost 
+      return alloc_cost 
   
 
   def _advance_stage(self):
@@ -125,7 +128,6 @@ class QubitAllocationEnvironment:
   def get_mask(self) -> torch.Tensor:
     """Returns a tensor of shape [n_qubits, n_cores+1] with True for valid actions and False for invalid actions. 
     This can be used for action masking in the policy."""
-    
     mask = torch.ones((self.circuit.n_qubits, self.hardware.n_cores+1), dtype=torch.bool)
     pair_q_indices = self.pair_indices.reshape(-1)
     is_pair = torch.zeros(self.circuit.n_qubits, dtype=torch.bool)
@@ -138,12 +140,15 @@ class QubitAllocationEnvironment:
     # Mask out all actions which are not the buffer core in single qubits if stage = 0
     if self.stage == 0:
       mask[~is_pair, :self.hardware.n_cores] = False
+    # Mask out buffer action for single qubits if stage = 1
+    if self.stage == 1:
+      mask[~is_pair, self.hardware.n_cores] = False
 
     # Mask out all cores that have capacity < 1 for single qubits and < 2 for pair qubits
     mask[:, self.current_core_caps < 1] = False
     pair_cap_mask = self.current_core_caps < 2
     if is_pair.any() and (pair_cap_mask).any():
-      mask[is_pair.unsqueeze(1), pair_cap_mask] = False
+      mask[is_pair.unsqueeze(1) & pair_cap_mask.unsqueeze(0)] = False
 
     # Once a qubit is allocated, it cannot be allocated again: mask out all cores for that qubit except their allocation
     # Actively unmask actions that were masked for capacity reasons for allocated qubits

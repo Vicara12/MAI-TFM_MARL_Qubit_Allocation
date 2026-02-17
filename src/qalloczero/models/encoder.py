@@ -366,7 +366,8 @@ class AgentBinder(nn.Module):
         fused = self.proj_in(combined)
         fused = self.act(fused)
         fused = self.proj_out(fused)
-        
+
+        # TODO: Ablate this residual scale
         return fused + (self.resid_scale * qubit_emb)
 
 
@@ -449,7 +450,6 @@ class DynamicAgentGrouper(nn.Module):
     
     def agents_to_qubits(
         self, tensor: torch.Tensor, 
-        max_agents: int, 
         q_to_agent: Optional[torch.Tensor] = None, 
         current_core_allocs: Optional[torch.Tensor] = None, 
         num_cores: int = None) -> torch.Tensor:
@@ -462,10 +462,16 @@ class DynamicAgentGrouper(nn.Module):
             if self.q_to_agent is None:
                 raise ValueError("q_to_agent not provided and no cached mapping available")
             q_to_agent = self.q_to_agent
-        a_dim = next(i for i, s in enumerate(tensor.shape) if s == max_agents)
-        view_shape = [1] * a_dim + [q_to_agent.numel()] + [1] * (tensor.ndim - a_dim - 1)
+        
+        a_dim = tensor.ndim - 1 # Agent dim 
+        
+        view_shape = [1] * a_dim + [q_to_agent.numel()]
         idx = q_to_agent.view(view_shape)
-        idx = idx.expand(*tensor.shape[:a_dim], q_to_agent.numel(), *tensor.shape[a_dim + 1:])
+        
+        final_shape = list(tensor.shape)
+        final_shape[a_dim] = q_to_agent.numel()
+        
+        idx = idx.expand(final_shape)
         out = torch.gather(tensor, a_dim, idx)
         
         if current_core_allocs is not None:
@@ -503,6 +509,7 @@ class DynamicAgentGrouper(nn.Module):
         # Pairs and singles
         q1, q2, q_single = self._extract_agent_indices(adj_matrix, current_core_allocs, C, device)
 
+        # TODO: Ablate: now we're just summing the embds of two qubits in a pair
         pair_agents = bound[q1] + bound[q2] # [P, C, d]
         single_agents = bound[q_single]# [S, C, d]
 

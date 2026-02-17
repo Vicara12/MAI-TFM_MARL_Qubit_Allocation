@@ -80,7 +80,17 @@ if __name__ == "__main__":
   ''' Train the base models with direct allocation '''
   allocator = DirectAllocator(
     device='cpu',
-    model_cfg=ModelConfigs(embed_size=64, num_heads=2, num_layers=2),
+    model_cfg=ModelConfigs(
+      embed_size=64, 
+      num_heads=2, 
+      num_layers=2,
+      context_embds_kwargs={
+        'use_communication': True,
+        'num_communication_layers': 2,
+        'use_final_norm': False,
+        'normalization': 'rms'
+      }
+      ),
     mode=DirectAllocator.Mode.Fast,
     env='maqa',
   )

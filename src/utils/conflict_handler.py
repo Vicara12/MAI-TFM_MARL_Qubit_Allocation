@@ -84,11 +84,13 @@ class AgentHandler(abc.ABC):
         demand_matrix = demands_sorted.unsqueeze(-1) * action_one_hot
         cumulative_demand = demand_matrix.cumsum(dim=0)
 
-        cumulative_for_action = cumulative_demand.gather(1, sorted_actions.unsqueeze(-1)).squeeze(-1)
-        capacity_for_action = capacities_with_buffer.gather(0, sorted_actions)
+        # ensure that sorted_actions is at least 1D
+        sorted_actions = sorted_actions.view(-1, 1) 
+        cumulative_for_action = cumulative_demand.gather(1, sorted_actions).squeeze(-1)
+        capacity_for_action = capacities_with_buffer.gather(0, sorted_actions.squeeze(-1))
 
         over_capacity = cumulative_for_action > capacity_for_action
-        mask_sorted = over_capacity & (sorted_actions != buffer_idx)
+        mask_sorted = over_capacity & (sorted_actions.squeeze(-1) != buffer_idx)
 
         inverse_order = order_indices.argsort(dim=0)
         mask = mask_sorted.gather(0, inverse_order)

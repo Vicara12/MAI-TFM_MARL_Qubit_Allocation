@@ -620,12 +620,13 @@ class DirectAllocator:
 
       action_mask = self.env.get_mask().to(device)
 
+      curr_core_allocs = self.env.current_assignment.to(device)
+      
       if slice_idx == 0:
-        prev_core_allocs = torch.full((hardware.n_qubits,), hardware.n_cores, device=device)
+        prev_core_allocs = torch.full_like(curr_core_allocs, hardware.n_cores, device=device)
       else:
         prev_core_allocs = self.env.prev_slice_allocations.to(device)
 
-      curr_core_allocs = self.env.current_assignment.to(device)
 
       core_caps_vec = self.env.current_core_caps if self.env.current_core_caps is not None else hardware.core_capacities
       core_caps = core_caps_vec.to(device)
@@ -685,12 +686,12 @@ class DirectAllocator:
 
       actions_gather = actions if hasattr(cfg, 'use_init_logp') and cfg.use_init_logp else final_actions
       if ret_train_data:
-        all_probs.append(log_pol.gather(1, actions_gather.unsqueeze(1)).squeeze(1).detach())
-        all_valid.append(valid.detach())
+        selected_log_probs = log_pol.gather(1, actions_gather.unsqueeze(1)).squeeze(1)
+        all_probs.append(selected_log_probs)
+        all_valid.append(valid)
 
       actions_q = self.pred_model.grouper.agents_to_qubits(
         final_actions, 
-        max_agents=circuit.n_qubits, 
         current_core_allocs=curr_core_allocs, 
         num_cores=hardware.n_cores
       )
