@@ -77,6 +77,8 @@ class QubitAllocationEnvironment:
     '''
     # Capacities are recomputed at each decoding step (successive steps within a slice!)
     # based on the current allocation
+    device = self.hardware.core_capacities.device
+    cores = cores.to(device)
     core_fill = torch.bincount(cores, minlength=self.hardware.n_cores+1)
     self.current_core_caps[:-1] = self.hardware.core_capacities - core_fill[:-1]
     self.current_core_caps[-1] = self.circuit.n_qubits # TODO: Is this needed? In the agent handler we set this capacity to 
@@ -149,9 +151,10 @@ class QubitAllocationEnvironment:
   def get_mask(self) -> torch.Tensor:
     """Returns a tensor of shape [n_qubits, n_cores+1] with True for valid actions and False for invalid actions. 
     This can be used for action masking in the policy."""
-    mask = torch.ones((self.circuit.n_qubits, self.hardware.n_cores+1), dtype=torch.bool)
+    device = self.hardware.core_capacities.device
+    mask = torch.ones((self.circuit.n_qubits, self.hardware.n_cores+1), dtype=torch.bool, device=device)
     pair_q_indices = self.pair_indices.reshape(-1)
-    is_pair = torch.zeros(self.circuit.n_qubits, dtype=torch.bool)
+    is_pair = torch.zeros(self.circuit.n_qubits, dtype=torch.bool, device=device)
     if pair_q_indices.numel() > 0:
       is_pair[pair_q_indices] = True
 
