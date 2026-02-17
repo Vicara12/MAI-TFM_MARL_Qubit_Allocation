@@ -99,7 +99,7 @@ if __name__ == "__main__":
       ),
     env='qa',
   )
-  train_model_da(allocator, name="da", use_wandb=True, wandb_project="MQA")
+  train_model_da(allocator, name="da", use_wandb=False, wandb_project="MQA")
 
   ''' Refine a direct allocator model '''
   # finetune_model_da(name="da")

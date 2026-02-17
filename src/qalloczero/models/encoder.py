@@ -393,17 +393,25 @@ class DynamicAgentGrouper(nn.Module):
         self.q_to_agent = None
 
     
-    def _get_dist(self, prev_core_allocs, core_connectivity):
+    def _get_dist(self, 
+        prev_core_allocs, 
+        core_connectivity,
+        current_core_allocs,
+        ):
         """
-        Computes [Q, C] distance matrix from the last core allocations
-        and the core connectivity matrix.
-        NOTE: Should this be recomputed at every step?
+        Computes [Q, C] distance matrix from the current core allocations (qubits allocated in current
+        time slice) and previous core allocations (qubits yet to be allocated)
         """
         num_cores = core_connectivity.size(0)
-        is_buffer = prev_core_allocs >= num_cores # [Q]
+        is_buffer_prev = prev_core_allocs >= num_cores # [Q]
+        is_buffer_curr = current_core_allocs >= num_cores # [Q] 
+        # for allocated qubits, we take the current allocation as the previous allocation for distance calculation
+        # this gives information on the current state of the allocation
+        prev_core_allocs[~is_buffer_curr] = current_core_allocs[~is_buffer_curr] 
         safe = prev_core_allocs.clamp(0, num_cores - 1) # [Q]
         dist = core_connectivity.index_select(0, safe.long()) # [Q, C]
         # if qubit is in the buffer, replace its row of distances with zeros
+        is_buffer = is_buffer_prev | is_buffer_curr
         dist = torch.where(is_buffer.unsqueeze(-1), dist.new_zeros(1), dist)
         return dist  # [Q, C]
     
@@ -497,7 +505,7 @@ class DynamicAgentGrouper(nn.Module):
         device = qubit_embeds.device
 
         # Distances and binding
-        dist = self._get_dist(prev_core_allocs, core_connectivity) # [Q, C]
+        dist = self._get_dist(prev_core_allocs, core_connectivity, current_core_allocs) # [Q, C]
         dist_emb = self.dist_proj(dist.unsqueeze(-1)) # [Q, C, d]
         qubit_expanded = qubit_embeds[:, None, :].expand(-1, dist_emb.size(1), -1) # [Q, C, d]
         bound = self.binder(qubit_expanded, dist_emb) # [Q, C, d]
