@@ -160,6 +160,7 @@ class DirectAllocator:
     verbose: bool = False
   ):
     device = self.device
+    hardware = hardware.to(device, non_blocking=True)
     self.pred_model.output_logits(True)
     self.pred_model.output_demands(True) # used in the conflict handler
     self.env.reset(circuit=circuit, hardware=hardware)
@@ -180,21 +181,23 @@ class DirectAllocator:
     #TODO: We'll remove the batch dim for the whole pipeline
     adj_matrices = circuit.adj_matrices.to(device)
     slice_embds = self.pred_model.get_circuit_embds(adj_matrices)
+    core_size = hardware.core_capacities
+    core_connectivity = hardware.core_connectivity
     
     while not self.env.finished:
       slice_idx = self.env.current_slice
 
-      action_mask = self.env.get_mask().to(device)
+      action_mask = self.env.get_mask()
 
-      curr_core_allocs = self.env.current_assignment.to(device)
+      curr_core_allocs = self.env.current_assignment
       
       if slice_idx == 0:
         prev_core_allocs = torch.full_like(curr_core_allocs, hardware.n_cores, device=device)
       else:
-        prev_core_allocs = self.env.prev_slice_allocations.to(device)
+        prev_core_allocs = self.env.prev_slice_allocations
 
       core_caps_vec = self.env.current_core_caps if self.env.current_core_caps is not None else hardware.core_capacities
-      core_caps = core_caps_vec.to(device)
+      core_caps = core_caps_vec
 
       # Retrieve the embedding for this slice 
       # TODO: Perhaps our code could be parallelized for GRPO
@@ -206,9 +209,9 @@ class DirectAllocator:
         prev_core_allocs=prev_core_allocs,
         current_core_allocs=curr_core_allocs,
         core_capacities=core_caps,
-        core_size=hardware.core_capacities.to(device),
-        core_connectivity=hardware.core_connectivity.to(device),
-        adj_matrix=adj_matrices[slice_idx, :, :].to(device),
+        core_size=core_size,
+        core_connectivity=core_connectivity,
+        adj_matrix=adj_matrices[slice_idx],
         action_mask=action_mask,
       )
 
@@ -290,7 +293,12 @@ class DirectAllocator:
         f"circuit: {hardware.n_qubits} != {circuit.n_qubits}"
       ))
     self.pred_model.eval()
-    allocations = torch.empty([circuit.n_slices, circuit.n_qubits], dtype=torch.int)
+    hardware = hardware.to(self.device, non_blocking=True, copy=True)
+    allocations = torch.empty(
+      [circuit.n_slices, circuit.n_qubits],
+      dtype=torch.int,
+      device=self.device,
+    )
     self._allocate(
       allocations=allocations,
       circuit=circuit,
@@ -300,7 +308,7 @@ class DirectAllocator:
       verbose=verbose,
     )
     cost = sol_cost(allocations=allocations, core_con=hardware.core_connectivity)
-    return allocations, cost
+    return allocations.detach().cpu(), cost
 
 
   def _update_best(
@@ -462,7 +470,11 @@ class DirectAllocator:
           for group_i in range(train_cfg.group_size):
             opt_n = group_i + batch_i*train_cfg.group_size
             print(f"{pheader} ns={circuit.n_slices} nq={hardware.n_qubits} nc={hardware.n_cores} Optimizing {opt_n + 1}/{n_total}", end='')
-            allocations = torch.empty([circuit.n_slices, circuit.n_qubits], dtype=torch.int)
+            allocations = torch.empty(
+              [circuit.n_slices, circuit.n_qubits],
+              dtype=torch.int,
+              device=self.device,
+            )
             log_probs, valid_moves, unalloc_probs = self._allocate(
               allocations=allocations,
               circuit=circuit,

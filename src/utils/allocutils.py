@@ -16,7 +16,7 @@ def sol_cost(allocations: torch.Tensor, core_con: torch.Tensor) -> int:
         swapping qubits at cores i and j. No self loops, diagonal must be zero.
   '''
   num_slices = allocations.shape[0]
-  cost = torch.tensor(0.0)
+  cost = torch.zeros(1, device=core_con.device, dtype=core_con.dtype)
   for i in range(num_slices-1):
     cost += core_con[allocations[i,:].flatten(), allocations[i+1,:].flatten()].sum()
   return cost.item()

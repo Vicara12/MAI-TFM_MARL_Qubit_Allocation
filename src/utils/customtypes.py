@@ -273,3 +273,20 @@ class Hardware:
   @property
   def n_qubits(self):
     return sum(self.core_capacities).item()
+
+
+  def to(self, device, non_blocking: bool = False, copy: bool = False) -> "Hardware":
+    """Move hardware tensors to device, optionally returning a copy instead of in-place."""
+    device = torch.device(device)
+    if copy:
+      return Hardware(
+        core_capacities=self.core_capacities.to(device, non_blocking=non_blocking),
+        core_connectivity=self.core_connectivity.to(device, non_blocking=non_blocking),
+      )
+    self.core_capacities = self.core_capacities.to(device, non_blocking=non_blocking)
+    self.core_connectivity = self.core_connectivity.to(device, non_blocking=non_blocking)
+    return self
+
+
+  def clone(self) -> "Hardware":
+    return Hardware(self.core_capacities.clone(), self.core_connectivity.clone())
