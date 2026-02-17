@@ -31,23 +31,40 @@ class QubitAllocationEnvironment:
       self.hardware = hardware
     if self.circuit is None or self.hardware is None:
       raise ValueError("Circuit and hardware must be set before resetting the environment")
+    device = self.hardware.core_capacities.device
     self.allocations = torch.full(
       size=(self.circuit.n_slices, self.circuit.n_qubits),
       fill_value=self.hardware.n_cores,
       dtype=int,
-      device=self.hardware.core_capacities.device,
+      device=device,
     )
 
     self.current_core_caps = torch.empty(
       self.hardware.n_cores + 1,
       dtype=self.hardware.core_capacities.dtype,
-      device=self.hardware.core_capacities.device,
+      device=device,
     )
-    self.current_core_caps[:-1] = self.hardware.core_capacities
-    self.current_core_caps[-1] = self.circuit.n_qubits
     self.current_slice_ = 0
     self.stage = 0
-    self.unallocated_qubits = torch.ones(self.circuit.n_qubits, dtype=torch.bool)
+    self._init_current_slice_state()
+
+
+  def _init_current_slice_state(self) -> None:
+    """Reset per-slice tensors so masks/capacities align with the current circuit."""
+    device = self.hardware.core_capacities.device
+    self.current_core_caps[:-1] = self.hardware.core_capacities
+    self.current_core_caps[-1] = self.circuit.n_qubits
+    self.unallocated_qubits = torch.ones(
+      self.circuit.n_qubits,
+      dtype=torch.bool,
+      device=device,
+    )
+    self.current_assignment = torch.full(
+      (self.circuit.n_qubits,),
+      self.hardware.n_cores,
+      dtype=torch.long,
+      device=device,
+    )
     self.current_allocation = self.allocations[self.current_slice_]
   
 
@@ -97,8 +114,12 @@ class QubitAllocationEnvironment:
         
       self.stage = 0
       self.current_slice_ += 1
-      # reset current assignment
-      self.current_assignment = torch.full_like(cores, self.hardware.n_cores) 
+      if self.current_slice_ < self.circuit.n_slices:
+        self._init_current_slice_state()
+      else:
+        # keep tensors consistent for potential rendering after completion
+        self.unallocated_qubits = torch.zeros_like(self.unallocated_qubits)
+        self.current_assignment = torch.full_like(cores, self.hardware.n_cores)
 
       return alloc_cost 
   
@@ -157,6 +178,145 @@ class QubitAllocationEnvironment:
     return mask
 
 
+  def render(self, agent_mapping: Optional[torch.Tensor] = None) -> None:
+    """Render a snapshot of the environment using simple ASCII tables.
+
+    Args:
+      agent_mapping: Optional qubit -> agent vector produced externally (e.g. DynamicAgentGrouper).
+        If omitted, the environment falls back to its own mapping logic when available.
+    """
+    if self.circuit is None or self.hardware is None:
+      print("Environment not initialized. Call reset() first.")
+      return
+
+    def _format_table(headers: list[str], rows: list[list[object]]) -> str:
+      widths = [len(str(h)) for h in headers]
+      for row in rows:
+        for idx, cell in enumerate(row):
+          widths[idx] = max(widths[idx], len(str(cell)))
+      border = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+      def _row_to_line(values):
+        cells = [str(val).ljust(widths[idx]) for idx, val in enumerate(values)]
+        return "| " + " | ".join(cells) + " |"
+      lines = [border, _row_to_line(headers), border]
+      for row in rows:
+        lines.append(_row_to_line(row))
+      lines.append(border)
+      return "\n".join(lines)
+
+    def _fmt_core_id(val: int) -> str:
+      return "B" if val == self.hardware.n_cores else str(val)
+
+    needs_reset = False
+    if self.current_assignment is None:
+      self.current_assignment = torch.full(
+        (self.circuit.n_qubits,),
+        self.hardware.n_cores,
+        dtype=torch.long,
+        device=self.hardware.core_capacities.device,
+      )
+      needs_reset = True
+
+    def _normalize_mapping(mapping: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+      if mapping is None:
+        return None
+      if isinstance(mapping, torch.Tensor):
+        return mapping.detach().cpu()
+      return torch.as_tensor(mapping, dtype=torch.long)
+
+    external_mapping = _normalize_mapping(agent_mapping)
+
+    try:
+      core_caps = self.current_core_caps.detach().cpu().tolist() if self.current_core_caps is not None else None
+      header = f"Slice {self.current_slice_}/{self.circuit.n_slices} | Stage {self.stage}"
+      sub_header = f"Core caps left: {core_caps}" if core_caps is not None else "Core caps left: <unknown>"
+      line_len = max(len(header), len(sub_header))
+      print("=" * line_len)
+      print(header)
+      print(sub_header)
+      print(f"Legend: B = buffer/core {self.hardware.n_cores}")
+      print("=" * line_len)
+
+      current_alloc_cpu = self.current_assignment.detach().cpu().tolist()
+      prev_alloc_cpu = self.prev_slice_allocations.detach().cpu().tolist() if self.current_slice_ > 0 else None
+
+      mask_tensor = self.get_mask().detach().cpu()
+      mask_strings: list[str] = []
+      for q_idx in range(mask_tensor.shape[0]):
+        valid_actions = [
+          ("B" if action_idx == self.hardware.n_cores else str(action_idx))
+          for action_idx, allowed in enumerate(mask_tensor[q_idx].tolist())
+          if allowed
+        ]
+        mask_strings.append(" ".join(valid_actions) if valid_actions else "-")
+
+      alloc_rows = []
+      for q_idx, curr_val in enumerate(current_alloc_cpu):
+        prev_val = _fmt_core_id(prev_alloc_cpu[q_idx]) if prev_alloc_cpu is not None else "-"
+        alloc_rows.append([q_idx, _fmt_core_id(curr_val), prev_val, mask_strings[q_idx]])
+      print("Current vs previous allocation")
+      print(_format_table(["Qubit", "Current", "Prev", "Valid actions"], alloc_rows))
+
+      agent_lookup = None
+      agent_count = None
+      mapping_source = None
+      if external_mapping is not None:
+        if external_mapping.numel() == self.circuit.n_qubits:
+          agent_lookup = external_mapping.tolist()
+          agent_count = int(external_mapping.max().item() + 1) if external_mapping.numel() > 0 else 0
+          mapping_source = "(from agent grouper)"
+        else:
+          print("\nProvided agent_mapping has wrong length; ignoring external mapping.")
+
+      if agent_lookup is None and hasattr(self, 'agent_mapping'):
+        q_to_agent, num_agents, _ = self.agent_mapping
+        agent_lookup = q_to_agent.detach().cpu().tolist()
+        agent_count = num_agents
+        mapping_source = "(environment default)"
+
+      if agent_lookup is not None:
+        print(f"\nTotal agents in slice: {agent_count} {mapping_source}")
+      else:
+        print("\nAgent mapping unavailable for this render call.")
+
+      unalloc_mask = None
+      if self.unallocated_qubits is not None:
+        unalloc_mask = self.unallocated_qubits.detach().cpu().tolist()
+
+      def _agent_label(qubit_idx: int) -> str:
+        if agent_lookup is None:
+          return "-"
+        if unalloc_mask is not None and not unalloc_mask[qubit_idx]:
+          return "-"
+        return str(agent_lookup[qubit_idx])
+
+      pairs = self.pair_indices.detach().cpu()
+      if pairs.numel() == 0:
+        print("Pairs: none in this slice")
+      else:
+        pair_rows = []
+        for idx, pair in enumerate(pairs.tolist()):
+          pair_rows.append([idx, pair[0], pair[1], _agent_label(pair[0])])
+        print("Pairs and agent assignment")
+        print(_format_table(["#", "qA", "qB", "Agent"], pair_rows))
+
+      if agent_lookup is not None:
+        agent_bins: dict[int, list[int]] = {}
+        for qubit_id, agent_id in enumerate(agent_lookup):
+          if agent_id < 0:
+            continue
+          if unalloc_mask is not None and not unalloc_mask[qubit_id]:
+            continue
+          agent_bins.setdefault(agent_id, []).append(qubit_id)
+        agent_rows = [[agent_id, " ".join(map(str, qubits))] for agent_id, qubits in sorted(agent_bins.items())]
+        print("Agent -> qubits map")
+        print(_format_table(["Agent", "Qubits"], agent_rows))
+
+    finally:
+      if needs_reset:
+        self.current_assignment = None
+
+
   @property
   def pair_indices(self) -> torch.Tensor:
     """Returns a tensor of shape [num_pairs, 2] with the indices of the qubits that belong to the same gate in the current slice. 
@@ -186,63 +346,8 @@ class QubitAllocationEnvironment:
     return self.allocations
   
 
-class MAQubitAllocationEnvironment(QubitAllocationEnvironment):
-  """This wrapper environment class contains functions to map qubit-level to 
-  agent-level representations and vice versa, for the multi-agent approach."""
-  def __init__(self, circuit: Optional[Circuit] = None, hardware: Optional[Hardware] = None,
-               validate_solution: bool = False, auto_reset: bool = True):
-    super().__init__(circuit, hardware, validate_solution, auto_reset)
-    self._agent_mapping_slice = 0 # This is just a flag indicating when to cache the agent mapping
-
-
-  def map_qubit_to_agent(self, tensor: torch.Tensor, reducer: str = 'mean') -> Tuple[torch.Tensor, int, int]:
-    """Map qubit-dim -> padded agent-dim (mean/any/all over members)"""
-    q_to_agent, num_agents, max_agents = self.agent_mapping
-    return map_qubit_to_agent(tensor, q_to_agent, max_agents, reducer)
-  
-  
-  def map_agent_to_qubit(self, tensor: torch.Tensor) -> Tuple[torch.Tensor, int, int]:
-    """Map agent-dim -> qubit-dim (broadcast)"""
-    q_to_agent, num_agents, max_agents = self.agent_mapping
-    return map_agent_to_qubit(tensor, q_to_agent, max_agents)
-  
-  
-  def _agent_mapping(self) -> tuple[torch.Tensor, int, int]:
-    """Returns (q_to_agent, num_agents, max_agents) for current slice."""
-    
-    n_q = self.circuit.n_qubits
-    # Upper bound for padding; use n_q to cover the no-pair case cleanly.
-    max_agents = n_q
-    pairs = self.pair_indices  # [P,2] or [0,2]
-
-    if pairs.numel() == 0:
-      return torch.arange(n_q, dtype=torch.long), n_q, max_agents
-
-    q_to_agent = torch.full((n_q,), -1, dtype=torch.long)
-    p = pairs.shape[0]
-    # assign pair agents
-    q_to_agent.scatter_(0, pairs.reshape(-1), torch.arange(p, dtype=torch.long).repeat_interleave(2))
-
-    # assign single agents
-    singles = (q_to_agent == -1).nonzero(as_tuple=False).flatten()
-    start = p
-    q_to_agent.scatter_(0, singles, torch.arange(start, start + singles.numel(), dtype=torch.long))
-    num_agents = start + singles.numel()
-    return q_to_agent, num_agents, max_agents
-
-
-  @property
-  def agent_mapping(self) -> tuple[torch.Tensor, int, int]:
-    if not hasattr(self, '_agent_mapping_cache') or self._agent_mapping_slice != self.current_slice_:
-      self._agent_mapping_cache = self._agent_mapping()
-      self._agent_mapping_slice = self.current_slice_
-    return self._agent_mapping_cache
-
-
-
 ENV_REGISTRY = {
   'qa': QubitAllocationEnvironment,
-  'maqa': MAQubitAllocationEnvironment,
 } 
 
 # ############################# TESTING #############################

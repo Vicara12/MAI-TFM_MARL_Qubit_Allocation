@@ -91,8 +91,7 @@ if __name__ == "__main__":
         'normalization': 'rms'
       }
       ),
-    mode=DirectAllocator.Mode.Fast,
-    env='maqa',
+    env='qa',
   )
   train_model_da(allocator, name="da")
 
