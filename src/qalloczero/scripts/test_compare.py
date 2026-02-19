@@ -11,10 +11,7 @@ from qalloczero.alg.ts import TSConfig
 from qalloczero.alg.directalloc import DirectAllocator
 
 
-model_name = 'trained/da_ft_v2'
-chkpt = -1
-
-def validate():
+def validate(model_name: str, chkpt: int):
   torch.manual_seed(42)
   n_qubits = 16
   n_slices = 32
@@ -25,8 +22,8 @@ def validate():
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_conn)
   algos = dict(
     da_fast = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
-    da_seq  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
-    da_par  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
+    # da_seq  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    # da_par  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
     # azero =               AlphaZero.load("trained/da_v2_ft", device="cpu"),
   )
   cfg = TSConfig(
@@ -60,7 +57,7 @@ def validate():
     print(f" + t={Timer.get('t').time:.2f}s avg_cost={norm_res.mean().item():.4f} ({norm_res.std().item():.2f}) avg_swaps={sum(norm_swaps)/len(norm_swaps):.4f}")
 
 
-def benchmark():
+def benchmark(model_name: str, chkpt: int):
   circuit_names = [
     "qft", # Exact
     # "quantum_volume",
@@ -80,8 +77,8 @@ def benchmark():
 
   algos = dict(
     da_fast       = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
-    da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
-    da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
+    # da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    # da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
     # azero =               AlphaZero.load("trained/da_v2_ft", device="cpu"),
   )
   cfg = TSConfig(
@@ -107,12 +104,14 @@ def benchmark():
       print(f" + {cname}: t={Timer.get('t').time:.2f}s cost={cost} ({cost/(circ.n_gates_norm+1):.2f})")
 
 
-def compare_w_sota():
-  n_qubits=50
-  base_res = pd.read_csv(f'data/sota_cost_{n_qubits}.csv', index_col="circuit")
-  base_times = pd.read_csv(f'data/sota_time_{n_qubits}.csv', index_col="circuit")
+def compare_w_sota(model_name: str, chkpt: int, data_dir: str):
+  n_qubits=100
+  base_res = pd.read_csv(f'{data_dir}/sota_cost_{n_qubits}.csv', index_col=0)
+  base_times = pd.read_csv(f'{data_dir}/sota_time_{n_qubits}.csv', index_col=0)
+  base_res.index.name = 'circuit'
+  base_times.index.name = 'circuit'
 
-  with open(f'data/all_{n_qubits}.json', 'r') as f:
+  with open(f'{data_dir}/all_{n_qubits}.json', 'r') as f:
     data = json.load(f)
 
   n_qubits = data['n_qubits']
@@ -122,8 +121,9 @@ def compare_w_sota():
     circuits[name] = Circuit(slice_gates=slices, n_qubits=n_qubits)
   
   algos = dict(
-    da_sequential = DirectAllocator.load("trained/da_v2_ft", device="cuda", checkpoint=-1).set_mode(DirectAllocator.Mode.Sequential),
-    da_parallel   = DirectAllocator.load("trained/da_v2_ft", device="cuda", checkpoint=-1).set_mode(DirectAllocator.Mode.Parallel),
+    da_fast       = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
+    # da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    # da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
   )
 
   n_cores = n_qubits//10
@@ -157,7 +157,7 @@ def compare_w_sota():
 
   my_results = pd.DataFrame.from_dict(my_results, orient="index").T
   all_res = pd.concat([base_res, my_results], axis=1)
-  all_res.to_csv(f'data/my_cost_{n_qubits}_.csv', index=True)
+  all_res.to_csv(f'{data_dir}/my_cost_{n_qubits}_.csv', index=True)
   my_times = pd.DataFrame.from_dict(my_times, orient="index").T
   all_times = pd.concat([base_times, my_times], axis=1)
-  all_times.to_csv(f'data/my_time_{n_qubits}_.csv', index=True)
+  all_times.to_csv(f'{data_dir}/my_time_{n_qubits}_.csv', index=True)

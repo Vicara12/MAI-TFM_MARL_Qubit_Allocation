@@ -6,7 +6,7 @@ import sys
 from collections import defaultdict
 import inspect
 
-import psutil
+# import psutil
 import os
 
 
@@ -30,12 +30,13 @@ class RamLogger:
 
 
 def get_ram_usage():
-  process = psutil.Process(os.getpid())
+  # process = psutil.Process(os.getpid())
   
-  # Get memory usage in bytes and convert to Megabytes (MB)
-  # rss = Resident Set Size (physical memory currently used)
-  mem_bytes = process.memory_info().rss 
-  return mem_bytes / (1024 * 1024 * 1024)
+  # # Get memory usage in bytes and convert to Megabytes (MB)
+  # # rss = Resident Set Size (physical memory currently used)
+  # mem_bytes = process.memory_info().rss 
+  # return mem_bytes / (1024 * 1024 * 1024)
+  return 0
 
 
 def print_ram_usage():  

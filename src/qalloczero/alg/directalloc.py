@@ -127,7 +127,7 @@ class DirectAllocator:
       if checkpoint == -1:
         checkpoint = max(list(chpt_files.keys()))
       elif checkpoint not in chpt_files.keys():
-        raise Exception(f'Checkpoint {checkpoint} not found: {", ".join(list(chpt_files.keys()))}')
+        raise Exception(f'Checkpoint {checkpoint} not found: {", ".join(list(map(str, sorted(list(chpt_files.keys())))))}')
       model_file = chpt_files[checkpoint]
     loaded.pred_model.load_state_dict(
       torch.load(
@@ -458,12 +458,15 @@ class DirectAllocator:
               next_interactions=next_interactions[:,slice_idx,:,:],
             )
             inverse_prob_all = torch.softmax(-logits, dim=-1)
-            inverse_prob = inverse_prob_all[:, c_i]/inverse_prob_all[:, c_i].sum()
-            # Add exploration noise to the priors
-            if cfg.noise != 0:
-              noise = torch.abs(torch.randn(inverse_prob.shape, device=self.device))
-              inverse_prob = (1 - cfg.noise)*inverse_prob + cfg.noise*noise
-              inverse_prob /= inverse_prob.sum()
+            if inverse_prob_all[:, c_i].sum().abs() < 1e-8:
+              inverse_prob = torch.ones_like(inverse_prob_all[:, c_i])/len(inverse_prob_all)
+            else:
+              inverse_prob = inverse_prob_all[:, c_i]/inverse_prob_all[:, c_i].sum()
+              # Add exploration noise to the priors
+              if cfg.noise != 0:
+                noise = torch.abs(torch.randn(inverse_prob.shape, device=self.device))
+                inverse_prob = (1 - cfg.noise)*inverse_prob + cfg.noise*noise
+                inverse_prob /= inverse_prob.sum()
             qubit_idx = inverse_prob.argmax() if cfg.greedy else torch.distributions.Categorical(inverse_prob).sample()
             if ret_train_data:
               all_unalloc_probs.append(inverse_prob[qubit_idx])
@@ -617,6 +620,7 @@ class DirectAllocator:
   def train(
     self,
     train_cfg: TrainConfig,
+    verbose: bool = False,
   ) -> dict[str, list]:
     self.iter_timer = Timer.get("_train_iter_timer")
     self.iter_timer.reset()
@@ -669,11 +673,13 @@ class DirectAllocator:
           optimizer=optimizer,
           opt_cfg=opt_cfg,
           train_cfg=train_cfg,
+          verbose=verbose,
         )
 
         # Validate
         if (it+1)%train_cfg.validate_each == 0:
-          print(f"\033[2K\r      Running validation...", end='')
+          if verbose:
+            print(f"\033[2K\r      Running validation...", end='')
           with torch.no_grad():
             val_cost = self._validation(train_cfg=train_cfg)
           vc_mean = val_cost.mean().item()
@@ -729,6 +735,7 @@ class DirectAllocator:
     optimizer: torch.optim.Optimizer,
     opt_cfg: DAConfig,
     train_cfg: TrainConfig,
+    verbose: bool = False,
   ) -> float:
     self.pred_model.train()
     n_total = train_cfg.batch_size*train_cfg.group_size
@@ -752,12 +759,13 @@ class DirectAllocator:
           inv_moves_sum = torch.empty([train_cfg.group_size], device=self.device)
 
           for group_i in range(train_cfg.group_size):
-            print((
-              f"{pheader} ns={circuit.n_slices} nq={hardware.n_qubits} nc={hardware.n_cores} "
-              f"Batch {batch_i+1}/{train_cfg.batch_size}, "
-              f"optimizing {group_i + 1}/{train_cfg.group_size}"),
-              end=''
-            )
+            if verbose:
+              print((
+                f"{pheader} ns={circuit.n_slices} nq={hardware.n_qubits} nc={hardware.n_cores} "
+                f"Batch {batch_i+1}/{train_cfg.batch_size}, "
+                f"optimizing {group_i + 1}/{train_cfg.group_size}"),
+                end=''
+              )
             allocations = torch.empty([circuit.n_slices, circuit.n_qubits], dtype=torch.int)
             log_probs, valid_moves, unalloc_probs = self._allocate(
               allocations=allocations,
