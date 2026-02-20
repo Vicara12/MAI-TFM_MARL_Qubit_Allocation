@@ -43,8 +43,8 @@ def train_model_da(allocator, name: str):
   allocator.train(train_cfg)
 
 
-def finetune_model_da(name: str):
-  allocator = DirectAllocator.load(name, checkpoint=-1).set_mode(DirectAllocator.Mode.Fast)
+def finetune_model_da(name: str, chkpt: int):
+  allocator = DirectAllocator.load(name, checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential)
   validation_hardware = Hardware(
     core_capacities=torch.tensor([4]*4),
     core_connectivity=(torch.ones(4,4) - torch.eye(4))
@@ -57,15 +57,15 @@ def finetune_model_da(name: str):
     validate_each=25,
     validation_hardware=validation_hardware,
     validation_circuits=[val_sampler.sample() for _ in range(32)],
-    store_path=f"{name}_ft",
-    initial_noise=0.01,
+    store_path=name,
+    initial_noise=0.2,
     noise_decrease_factor=0.9995,
     min_noise=0.0,
     circ_sampler=RandomCircuit(num_lq=16, num_slices=(4,32)),
     # circ_sampler=MixedCircuitSampler(num_lq=20, samplers=[
-    #   (0.50,      RandomCircuit(num_lq=64, num_slices=(8,64))),
-    #   (0.25,   HotRandomCircuit(num_lq=64, num_slices=(8,64))),
-    #   (0.25, DenseRandomCircuit(num_lq=64, num_slices=(8,64))),
+    #   (0.50,      RandomCircuit(num_lq=64, num_slices=lambda: randint(8,64))),
+    #   (0.25,   HotRandomCircuit(num_lq=64, num_slices=lambda: randint(8,64))),
+    #   (0.25, DenseRandomCircuit(num_lq=64, num_slices=lambda: randint(8,64))),
     # ]),
     lr=5e-5,
     inv_mov_penalization=0.6,
@@ -73,7 +73,7 @@ def finetune_model_da(name: str):
     hardware_sampler=HardwareSampler(max_nqubits=16, range_ncores=[2,8]),
     dropout=0.0,
   )
-  allocator.train(train_cfg)
+  allocator.resume_training(name, train_cfg)
 
 
 
@@ -94,13 +94,13 @@ if __name__ == "__main__":
     allocator = DirectAllocator(
       device='cuda',
       model_cfg=ModelConfigs(embed_size=64, num_heads=2, num_layers=2),
-      mode=DirectAllocator.Mode.Fast,
+      mode=DirectAllocator.Mode.Sequential,
     )
     train_model_da(allocator, name=args.name)
 
   ''' Refine a direct allocator model '''
   if args.finetune:
-    finetune_model_da(name=args.name)
+    finetune_model_da(name=args.name, chkpt=args.checkpoint)
 
   ''' Benchmark '''
   if args.benchmark:

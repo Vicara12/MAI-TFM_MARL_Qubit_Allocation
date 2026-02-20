@@ -21,9 +21,8 @@ def validate(model_name: str, chkpt: int):
   core_conn = torch.ones((n_cores,n_cores)) - torch.eye(n_cores)
   hardware = Hardware(core_capacities=core_caps, core_connectivity=core_conn)
   algos = dict(
-    da_fast = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
-    # da_seq  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
-    # da_par  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
+    da_seq  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    da_par  = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
     # azero =               AlphaZero.load("trained/da_v2_ft", device="cpu"),
   )
   cfg = TSConfig(
@@ -76,9 +75,8 @@ def benchmark(model_name: str, chkpt: int):
 
 
   algos = dict(
-    da_fast       = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
-    # da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
-    # da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
+    da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
     # azero =               AlphaZero.load("trained/da_v2_ft", device="cpu"),
   )
   cfg = TSConfig(
@@ -121,9 +119,8 @@ def compare_w_sota(model_name: str, chkpt: int, data_dir: str):
     circuits[name] = Circuit(slice_gates=slices, n_qubits=n_qubits)
   
   algos = dict(
-    da_fast       = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Fast),
-    # da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
-    # da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
+    da_sequential = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Sequential),
+    da_parallel   = DirectAllocator.load(model_name,    device="cuda", checkpoint=chkpt).set_mode(DirectAllocator.Mode.Parallel),
   )
 
   n_cores = n_qubits//10
