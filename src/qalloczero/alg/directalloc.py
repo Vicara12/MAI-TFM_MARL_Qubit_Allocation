@@ -67,6 +67,7 @@ class DirectAllocator:
     )
     self.pred_model.to(device)
     self.mode = mode
+    self.checkpoint = None
   
 
   @property
@@ -123,18 +124,20 @@ class DirectAllocator:
     model_file = "pred_mod.pt"
     if checkpoint is not None:
       chpt_files = get_all_checkpoints(path)
-      if checkpoint == -1:
-        checkpoint = max(list(chpt_files.keys()))
+      if checkpoint < 0:
+        checkpoint = sorted((list(chpt_files.keys())))[checkpoint]
       elif checkpoint not in chpt_files.keys():
         raise Exception(f'Checkpoint {checkpoint} not found: {", ".join(list(map(str, sorted(list(chpt_files.keys())))))}')
       model_file = chpt_files[checkpoint]
+    complete_path = os.path.join(path, model_file)
     loaded.pred_model.load_state_dict(
       torch.load(
-        os.path.join(path, model_file),
+        complete_path,
         weights_only=False,
         map_location=device,
       )
     )
+    loaded.checkpoint = complete_path
     return loaded
   
 
@@ -371,16 +374,13 @@ class DirectAllocator:
             circuit_emb=circ_embs[:,slice_idx,:,:].expand((len(free_core_qubits), -1, -1)),
             next_interactions=next_interactions[:,slice_idx,:,:],
           )
-          inverse_prob_all = torch.softmax(-logits, dim=-1)
-          if inverse_prob_all[:, c_i].sum().abs() < 1e-8:
-            inverse_prob = torch.ones_like(inverse_prob_all[:, c_i])/len(inverse_prob_all)
-          else:
-            inverse_prob = inverse_prob_all[:, c_i]/inverse_prob_all[:, c_i].sum()
-            # Add exploration noise to the priors
-            if cfg.noise != 0:
-              noise = torch.abs(torch.randn(inverse_prob.shape, device=self.device))
-              inverse_prob = (1 - cfg.noise)*inverse_prob + cfg.noise*noise
-              inverse_prob /= inverse_prob.sum()
+          inverse_prob_all = torch.softmax(-logits, dim=-2)
+          inverse_prob = inverse_prob_all[:, c_i].reshape(-1)
+          # Add exploration noise to the priors
+          if cfg.noise != 0:
+            noise = torch.abs(torch.randn(inverse_prob.shape, device=self.device))
+            inverse_prob = (1 - cfg.noise)*inverse_prob + cfg.noise*noise
+            inverse_prob /= inverse_prob.sum()
           qubit_idx = inverse_prob.argmax() if cfg.greedy else torch.distributions.Categorical(inverse_prob).sample()
           if ret_train_data:
             all_unalloc_probs.append(inverse_prob[qubit_idx])
@@ -756,12 +756,19 @@ class DirectAllocator:
       raise Exception(f'Unrecognized allocation mode: {data_log['train_cfg']['inference_mode']}')
     
     def assign_or_tell(what: str):
-      if what in data_log['train_cfg'].keys():
-        return data_log['train_cfg'][what]
-      else:
-        fallback = train_cfg[what]
-        warnings.warn(f'Field {what} not found in data_log, using fallback: {fallback}')
+      fallback = asdict(train_cfg)[what]
+      if fallback is not None:
+        print(f"Using new train cfg for {what}: {fallback}")
         return fallback
+      elif what in data_log['train_cfg'].keys():
+        return data_log['train_cfg'][what]
+      raise Exception(f'Field {what} not found in data_log and train cfg value is None')
+    
+    opt_cfg = DAConfig(
+      noise=data_log['noise'][-1] if train_cfg.initial_noise is None else train_cfg.initial_noise,
+      mask_invalid=train_cfg.mask_invalid,
+      greedy=False,
+    )
     
     train_cfg.train_iters = assign_or_tell('train_iters')
     train_cfg.batch_size = assign_or_tell('batch_size')
@@ -780,12 +787,6 @@ class DirectAllocator:
       warnings.warn(f"Could not find optimizer checkpoint in provided folder: {opt_chkpt}")
     else:
       optimizer.load_state_dict(torch.load(opt_chkpt))
-    
-    opt_cfg = DAConfig(
-      noise=data_log['noise'][-1],
-      mask_invalid=train_cfg.mask_invalid,
-      greedy=False,
-    )
 
     self._train(
       optimizer=optimizer,
